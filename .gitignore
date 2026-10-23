@@ -83,5 +83,14 @@ htmlcov/
 !.env.example
 
 
-
-
+data/
+outputs/
+notes/
+*.csv
+*.mp4
+*.xml
+*.txt
+!requirements*.txt
+.ipynb_checkpoints/
+__pycache__/
+.env
