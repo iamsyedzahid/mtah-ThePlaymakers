@@ -5,8 +5,9 @@ the pipeline depends on: frame_id - 1 indexing, 0..1 coordinates to metres, slot
 
     python -m mtah.io_atd        # load the real ATD, cache it, print aggregate numbers only
 
-kloppy takes minutes on the full match, so the check above writes a cache under data/ (gitignored,
-and blocked by scripts/check_repo.sh). Delete the cache file to rebuild it.
+kloppy takes minutes on the full match, so the check above writes a cache under outputs/cache/
+(gitignored, and too big for scripts/check_repo.sh to let through). The data/ folder stays exactly
+as games.py expects. Delete the cache file to rebuild it.
 """
 from pathlib import Path
 from typing import Any
@@ -20,7 +21,7 @@ from mtah.teams import slot_teams
 
 
 def default_cache() -> Path:
-    return data_dir() / "cache" / "tactical_tracking.npz"
+    return Path(__file__).resolve().parents[1] / "outputs" / "cache" / "tactical_tracking.npz"
 
 
 def tracking_from_frame(
@@ -155,7 +156,7 @@ if __name__ == "__main__":
     cache = default_cache()
     if cache.is_file():
         tracking = load_tracking(cache)
-        print("read the cache; delete data/cache/ to reload and re-check the team order")
+        print("read the cache; delete outputs/cache/ to reload and re-check the team order")
     else:
         tracking, teams = _load_from_atd()
         print(f"home = {teams[0]}, away = {teams[1]}   (DATA.md: home is Barcelona)")
