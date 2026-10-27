@@ -104,66 +104,7 @@ def test_synthetic_corner_origin(syn):
     assert (players[seen] <= np.array(config.PITCH_M)).all()
 
 
-# -- ball (R1) --------------------------------------------------------------------------------
-
-def test_ball_clean_on_synthetic(syn):
-    raw_missing = np.isnan(syn.tracking.ball).any(axis=1)
-    filled, lost = ball.ball_clean(syn.tracking.ball)
-    assert filled.shape == (T, 2) and filled.dtype == np.float64
-    assert lost.shape == (T,) and lost.dtype == bool
-    assert not np.isnan(filled).any()
-    assert lost.sum() < raw_missing.sum()  # short gaps are splined, not lost
-
-
-def _line(n=200):
-    """A ball rolling at 10 m/s (0.4 m/frame) along x, on a corner-origin pitch."""
-    return np.column_stack([10.0 + 0.4 * np.arange(n), np.full(n, 30.0)])
-
-
-def test_ball_clean_short_gap_is_splined():
-    truth = _line()
-    b = truth.copy()
-    b[100:110] = np.nan  # 0.4 s
-    filled, lost = ball.ball_clean(b)
-    assert not lost.any()
-    np.testing.assert_allclose(filled, truth, atol=0.5)
-
-
-def test_ball_clean_long_and_edge_gaps_are_lost():
-    b = _line()
-    b[:3] = np.nan  # leading gap: nothing to spline from
-    b[100:140] = np.nan  # 1.6 s
-    b[-2:] = np.nan  # trailing gap
-    filled, lost = ball.ball_clean(b)
-    np.testing.assert_array_equal(np.flatnonzero(lost), np.r_[0:3, 100:140, 198:200])
-    assert not np.isnan(filled).any()
-
-
-def test_ball_clean_speed_cap_removes_glitch():
-    truth = _line()
-    b = truth.copy()
-    b[50] += [15.0, 0.0]  # a 15 m jump in one frame is 375 m/s
-    filled, lost = ball.ball_clean(b)
-    assert not lost.any()
-    np.testing.assert_allclose(filled[50], truth[50], atol=0.5)
-
-
-def test_ball_clean_all_nan():
-    filled, lost = ball.ball_clean(np.full((4, 2), np.nan))
-    assert lost.all()
-    np.testing.assert_allclose(filled, [[52.65, 34.0]] * 4)  # centre spot
-
-
-def test_gap_stats_known_mask():
-    mask = np.array([0, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1], dtype=bool)  # gaps of 2, 5, 1
-    stats = ball.gap_stats(mask)
-    assert stats["n_gaps"] == 3
-    assert stats["n_lost"] == 8
-    assert stats["longest_gap_frames"] == 5
-    assert stats["median_gap_frames"] == 2.0
-    assert stats["longest_gap_s"] == 5 / 25
-    assert all(type(v) in (int, float) for v in stats.values())  # numbers only, not bools/arrays
-    assert ball.gap_stats(np.zeros(0, dtype=bool))["n_gaps"] == 0
+# Ball cleaning and gap statistics (R1) are in tests/test_r1_ball.py.
 
 
 # -- evidence (R2) ----------------------------------------------------------------------------

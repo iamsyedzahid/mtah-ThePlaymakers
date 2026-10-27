@@ -2,12 +2,13 @@
 
 Cleaning drops samples that imply a speed over SPEED_CAP_MS, smooths the rest lightly and splines
 across gaps shorter than SPLINE_GAP_FRAMES. Longer gaps, and gaps at either end of the track, are
-flagged in lost_mask and filled linearly, so the output never holds NaN.
+flagged in lost_mask and filled linearly, so the output never holds NaN. A final check guarantees
+that no two consecutive trusted frames are further apart than the speed cap allows.
 """
 import math
 
 import numpy as np
-from scipy.interpolate import CubicSpline
+from scipy.interpolate import PchipInterpolator
 
 from mtah.config import FPS, PITCH_M
 from mtah.interfaces import BoolArray, FloatArray
@@ -15,15 +16,33 @@ from mtah.interfaces import BoolArray, FloatArray
 SPEED_CAP_MS = 35.0
 SMOOTH_FRAMES = 5  # centred moving average, 0.2 s
 SPLINE_GAP_FRAMES = FPS  # gaps shorter than 1 s are splined; longer ones are lost
+MAX_SPEED_PASSES = 5  # re-checks of the cleaned track before giving up on a too-fast frame
 
 
 def ball_clean(ball: FloatArray) -> tuple[FloatArray, BoolArray]:
     ball = np.asarray(ball, dtype=float)
     if ball.ndim != 2 or ball.shape[1] != 2:
         raise ValueError(f"ball must be [T, 2], got {ball.shape}")
-    T = len(ball)
     seen = ~np.isnan(ball).any(axis=1)
     seen &= ~_speed_outliers(ball, seen)
+
+    # Smoothing and filling can still create a jump next to a removed sample. Drop the samples on
+    # both sides of any trusted too-fast step and fill again; whatever survives that is lost.
+    for _ in range(MAX_SPEED_PASSES):
+        filled, lost = _fill(ball, seen)
+        fast = _too_fast(filled, lost)
+        if not fast.any():
+            return filled, lost
+        seen[:-1] &= ~fast
+        seen[1:] &= ~fast
+    lost[:-1] |= fast
+    lost[1:] |= fast
+    return filled, lost
+
+
+def _fill(ball: FloatArray, seen: BoolArray) -> tuple[FloatArray, BoolArray]:
+    """Smooth the seen samples, spline short gaps, fill long gaps linearly and flag them lost."""
+    T = len(ball)
     if not seen.any():
         return np.tile(np.array(PITCH_M) / 2, (T, 1)), np.ones(T, dtype=bool)  # centre spot
 
@@ -35,9 +54,16 @@ def ball_clean(ball: FloatArray) -> tuple[FloatArray, BoolArray]:
     for start, end in zip(*_gaps(~seen)):
         if start > 0 and end < T and end - start < SPLINE_GAP_FRAMES:
             short[start:end] = True
-    if short.any():
-        filled[short] = CubicSpline(frames[seen], smooth[seen], axis=0)(frames[short])
+    if short.any() and seen.sum() >= 2:
+        # PCHIP never overshoots its neighbouring samples, unlike a plain cubic spline.
+        filled[short] = PchipInterpolator(frames[seen], smooth[seen], axis=0)(frames[short])
     return filled, ~seen & ~short
+
+
+def _too_fast(filled: FloatArray, lost: BoolArray) -> BoolArray:
+    """[T-1] True where a step between two trusted frames is faster than SPEED_CAP_MS."""
+    speed = np.linalg.norm(np.diff(filled, axis=0), axis=1) * FPS
+    return (speed > SPEED_CAP_MS) & ~lost[:-1] & ~lost[1:]
 
 
 def gap_stats(lost_mask: BoolArray, fps: int = FPS) -> dict[str, float]:

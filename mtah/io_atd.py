@@ -13,7 +13,7 @@ from typing import Any
 
 import numpy as np
 
-from mtah.ball import SPEED_CAP_MS
+from mtah.ball import SPEED_CAP_MS, _gaps
 from mtah.config import FPS, GRADED_HALVES, N_FRAMES, PITCH_M, data_dir
 from mtah.interfaces import AWAY, HOME, Tracking
 from mtah.teams import slot_teams
@@ -64,6 +64,9 @@ def load_tracking(cache: Path | None = None) -> Tracking:
     return tracking
 
 
+load = load_tracking  # the name used in the team plan
+
+
 def _load_from_atd() -> tuple[Tracking, Any]:
     """(Tracking, kloppy metadata.teams) straight from the ATD files. Takes minutes."""
     from starter.load_atd import load  # needs kloppy; imported here so tests never need it
@@ -107,6 +110,19 @@ def summary(tracking: Tracking) -> dict[str, float]:
         "ball_over_speed_cap_graded": mean(step[pairs] > SPEED_CAP_MS),
     }
 
+    # Coverage per half, and the gap-length distribution with gaps counted inside each half.
+    half_gaps = []
+    for half, (first, last) in enumerate(GRADED_HALVES, start=1):
+        seen_half = ball_seen[first : last + 1]
+        graded_stats[f"ball_present_half{half}"] = mean(seen_half)
+        starts, ends = _gaps(~seen_half)
+        half_gaps.append(ends - starts)
+    gaps_s = np.concatenate(half_gaps) / FPS
+    graded_stats["n_gaps_graded"] = int(gaps_s.size)
+    for q in (25, 50, 75, 90):
+        graded_stats[f"gap_p{q}_s"] = pct(gaps_s, q)
+    graded_stats["gap_max_s"] = float(gaps_s.max()) if gaps_s.size else float("nan")
+
     return graded_stats | {
         "n_frames": int(tracking.n_frames),
         "n_slots": int(tracking.team.size),
@@ -134,7 +150,7 @@ EXPECTED = {
 
 
 if __name__ == "__main__":
-    from mtah.ball import ball_clean, gap_stats
+    from mtah.ball import ball_clean
 
     cache = default_cache()
     if cache.is_file():
@@ -151,6 +167,8 @@ if __name__ == "__main__":
     graded = np.zeros(tracking.n_frames, dtype=bool)
     for first, last in GRADED_HALVES:
         graded[first : last + 1] = True
-    _, lost = ball_clean(tracking.ball)
-    print("raw ball gaps, graded frames:", gap_stats(np.isnan(tracking.ball[graded]).any(axis=1)))
-    print(f"lost after cleaning, graded frames: {lost[graded].mean():.4f}")
+    filled, lost = ball_clean(tracking.ball)
+    speed = np.linalg.norm(np.diff(filled, axis=0), axis=1) * FPS
+    trusted = graded[1:] & ~lost[1:] & ~lost[:-1]
+    print(f"after cleaning, graded frames: lost {lost[graded].mean():.4f}, "
+          f"trusted steps over {SPEED_CAP_MS:g} m/s: {int((speed[trusted] > SPEED_CAP_MS).sum())}")
