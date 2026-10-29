@@ -1,6 +1,6 @@
 """Ball gap statistics and cleaning (R1).
 
-Cleaning drops samples that imply a speed over SPEED_CAP_MS, smooths the rest lightly and splines
+Cleaning drops samples that imply a speed over SPEED_CAP_MS (a hard shot reaches 35-40 m/s), smooths the rest lightly and splines
 across gaps shorter than SPLINE_GAP_FRAMES. Longer gaps, and gaps at either end of the track, are
 flagged in lost_mask and filled linearly, so the output never holds NaN. A final check guarantees
 that no two consecutive trusted frames are further apart than the speed cap allows.
@@ -13,7 +13,8 @@ from scipy.interpolate import PchipInterpolator
 from mtah.config import FPS, PITCH_M
 from mtah.interfaces import BoolArray, FloatArray
 
-SPEED_CAP_MS = 35.0
+SPEED_CAP_MS = 40.0
+REANCHOR_FRAMES = 5  # a run this long that moves consistently is the ball, even far from the anchor
 SMOOTH_FRAMES = 5  # centred moving average, 0.2 s
 SPLINE_GAP_FRAMES = FPS  # gaps shorter than 1 s are splined; longer ones are lost
 MAX_SPEED_PASSES = 5  # re-checks of the cleaned track before giving up on a too-fast frame
@@ -91,17 +92,32 @@ def _gaps(mask: BoolArray) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _speed_outliers(ball: FloatArray, seen: BoolArray) -> BoolArray:
-    """Samples too far from the last accepted sample less than a gap's length earlier."""
+    """Samples too far from the last accepted sample less than a gap's length earlier.
+
+    A glitch jumps away and comes back. When REANCHOR_FRAMES rejected samples in a row instead
+    move consistently with each other, the anchor was the odd one out (or the tracker moved on):
+    they are accepted and become the new anchor, so one bad sample cannot wipe out a second.
+    """
     max_step = SPEED_CAP_MS / FPS  # metres per frame
     xs, ys = ball[:, 0].tolist(), ball[:, 1].tolist()
+
+    def fits(a: int, b: int) -> bool:
+        return math.hypot(xs[b] - xs[a], ys[b] - ys[a]) <= max_step * (b - a)
+
     bad = np.zeros(len(ball), dtype=bool)
     last = -1
+    chain: list[int] = []
     for f in np.flatnonzero(seen).tolist():
-        near = last >= 0 and f - last < SPLINE_GAP_FRAMES
-        if near and math.hypot(xs[f] - xs[last], ys[f] - ys[last]) > max_step * (f - last):
+        if last >= 0 and f - last < SPLINE_GAP_FRAMES and not fits(last, f):
             bad[f] = True
+            if chain and not (f - chain[-1] <= 2 and fits(chain[-1], f)):
+                chain = []
+            chain.append(f)
+            if len(chain) >= REANCHOR_FRAMES:
+                bad[chain] = False
+                last, chain = f, []
         else:
-            last = f
+            last, chain = f, []
     return bad
 
 

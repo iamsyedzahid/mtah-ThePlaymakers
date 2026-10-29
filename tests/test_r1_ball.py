@@ -76,3 +76,22 @@ def test_gap_stats_known_mask():
     assert stats["longest_gap_s"] == 5 / 25
     assert all(type(v) in (int, float) for v in stats.values())  # numbers only, not bools/arrays
     assert ball.gap_stats(np.zeros(0, dtype=bool))["n_gaps"] == 0
+
+
+def test_ball_clean_keeps_a_hard_shot():
+    # 38 m/s for 1.2 s: faster than any pass, but a real shot. It must stay trusted and in place.
+    shot = np.column_stack([10.0 + 38.0 / FPS * np.arange(30), np.full(30, 34.0)])
+    track = np.vstack([np.tile([10.0, 34.0], (20, 1)), shot, np.tile(shot[-1], (20, 1))])
+    cleaned, lost = ball.ball_clean(track)
+    assert not lost.any()
+    assert np.abs(cleaned - track).max() < 1.0
+
+
+def test_ball_clean_recovers_from_a_bad_anchor():
+    # The first sample after a gap is a glitch 20 m off; the true ball after it must survive.
+    track = np.tile([50.0, 30.0], (60, 1)) + np.column_stack([0.2 * np.arange(60), np.zeros(60)])
+    track[:10] = np.nan
+    track[10] = [70.0, 30.0]
+    cleaned, lost = ball.ball_clean(track)
+    assert lost[15:].sum() == 0
+    assert np.abs(cleaned[20:] - track[20:]).max() < 0.5
