@@ -120,20 +120,7 @@ def test_synthetic_corner_origin(syn):
 # Ball cleaning and gap statistics (R1) are in tests/test_r1_ball.py.
 
 
-# -- evidence (R2) ----------------------------------------------------------------------------
-
-def test_evidence_shape_and_nan(syn):
-    e = evidence.evidence(syn.tracking)
-    assert e.shape == (T,) and e.dtype == np.float64
-    assert np.isfinite(e).all()
-    assert (e[np.isnan(syn.tracking.ball).any(axis=1)] == 0).all()
-
-
-def test_evidence_sign():
-    players = np.array([[[0.0, 0.0], [10.0, 0.0]]] * 2)  # home at origin, away at x=10
-    tr = Tracking(np.array([[0.5, 0.0], [9.5, 0.0]]), players, np.array([0, 1]))
-    e = evidence.evidence(tr)
-    assert e[0] > 0 > e[1]
+# Control evidence (R2) is tested in tests/test_r2_evidence.py.
 
 
 # -- touches (R3) -----------------------------------------------------------------------------
