@@ -97,6 +97,19 @@ def test_synthetic_slots_like_the_real_atd(syn):
     assert used.sum() > 22  # tracks break and move to other slots
 
 
+def test_synthetic_receptions_and_deflections():
+    syn = make_synthetic(20_000, seed=0)
+    for events in (syn.receptions, syn.deflections):
+        frames = [f for f, _ in events]
+        assert frames == sorted(frames) and all(0 <= f < 20_000 for f in frames)
+    assert syn.receptions and syn.deflections
+    # a reception hands the ball to its team; a deflection never changes possession
+    for frame, side in syn.receptions:
+        assert syn.labels[frame] in ({H, D} if side == 0 else {A, D})
+    for frame, side in syn.deflections:
+        assert syn.labels[frame] in ({A, D} if side == 0 else {H, D})
+
+
 def test_synthetic_corner_origin(syn):
     players = syn.tracking.players
     seen = ~np.isnan(players[..., 0])
