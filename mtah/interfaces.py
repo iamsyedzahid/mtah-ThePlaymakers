@@ -93,7 +93,7 @@ class SetPiece(NamedTuple):
 def ball_clean(ball: FloatArray) -> tuple[FloatArray, BoolArray]:
     """Clean the ball track so downstream geometry never sees NaN.
 
-    Steps: drop samples implying a speed over about 35 m/s, smooth lightly, spline across gaps
+    Steps: drop samples implying a speed over about 40 m/s, smooth lightly, spline across gaps
     shorter than about 1 s. Returns (ball_filled [T, 2] float without NaN, lost_mask [T] bool).
     lost_mask is True where the position is not trustworthy: gaps of about 1 s or longer, and gaps
     at either end of the track. Those frames are still filled (linearly), so consumers must
