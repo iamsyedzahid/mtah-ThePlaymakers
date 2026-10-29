@@ -19,7 +19,8 @@ True are exactly 0, so R4 holds the previous team instead of guessing.
 
 Two alternatives with the same signature, for voting:
 - `evidence_weighted`: every player within WEIGHT_RADIUS_M counts, weight 1 / (d + 0.5 m), so
-  support and pressure show.
+  support and pressure show. The real ATD often tracks one player twice (up to 19 home tracks at
+  once), so a track within DUPLICATE_M of a teammate's track nearer the ball is not counted.
 - `evidence_speed_aware`: as `evidence`, but 0 while the ball moves faster than FLIGHT_SPEED_MS.
   A pass or shot in flight is nobody's, so it never flips to an opponent it flies past.
 """
@@ -35,6 +36,8 @@ DWELL_FRAMES = 5
 WEIGHT_RADIUS_M = 10.0
 WEIGHT_SOFTENING_M = 0.5
 FLIGHT_SPEED_MS = 12.0  # faster than any dribble; passes and shots are in flight
+DUPLICATE_M = 0.5  # two players of one team are almost never this close; one player tracked twice is
+CHUNK_FRAMES = 20_000  # bounds the memory of the pairwise duplicate check
 
 
 def evidence(tracking: Tracking) -> FloatArray:
@@ -45,7 +48,7 @@ def evidence(tracking: Tracking) -> FloatArray:
 def evidence_weighted(tracking: Tracking) -> FloatArray:
     ball, lost = _prepare(tracking)
     dist = _distances(tracking, ball)
-    near = dist <= WEIGHT_RADIUS_M  # False where dist is inf
+    near = (dist <= WEIGHT_RADIUS_M) & _distinct(tracking, dist)  # False where dist is inf
     weight = np.where(near, 1.0 / (np.where(near, dist, 0.0) + WEIGHT_SOFTENING_M), 0.0)
     c_home = weight[:, tracking.team == HOME].sum(axis=1)
     c_away = weight[:, tracking.team == AWAY].sum(axis=1)
@@ -69,6 +72,23 @@ def _distances(tracking: Tracking, ball: FloatArray) -> FloatArray:
     """[T, S] ball-to-slot distance in metres, inf where the slot is not tracked."""
     dist = np.linalg.norm(tracking.players - ball[:, None, :], axis=2)
     return np.where(np.isnan(dist), np.inf, dist)
+
+
+def _distinct(tracking: Tracking, dist: FloatArray) -> BoolArray:
+    """[T, S] False for a track within DUPLICATE_M of a same-team track nearer the ball."""
+    keep = np.ones(dist.shape, dtype=bool)
+    for side in (HOME, AWAY):
+        members = np.flatnonzero(tracking.team == side)
+        order = np.arange(members.size)
+        for lo in range(0, len(dist), CHUNK_FRAMES):
+            pos = tracking.players[lo : lo + CHUNK_FRAMES, members]
+            d = dist[lo : lo + CHUNK_FRAMES, members]
+            gap = np.linalg.norm(pos[:, :, None] - pos[:, None, :], axis=3)  # [t, i, j], NaN if missing
+            nearer = (d[:, None, :] < d[:, :, None]) | ((d[:, None, :] == d[:, :, None]) & (order[None, :] < order[:, None]))
+            with np.errstate(invalid="ignore"):
+                twin = (gap <= DUPLICATE_M) & nearer
+            keep[lo : lo + CHUNK_FRAMES, members] = np.logical_not(twin.any(axis=2))
+    return keep
 
 
 def _gaussian(tracking: Tracking, ball: FloatArray) -> FloatArray:

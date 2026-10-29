@@ -99,3 +99,13 @@ def test_sign_agrees_with_synthetic_possession(fn):
     live = np.isin(syn.labels, ["H", "A"]) & (np.abs(e) > 0.5)
     agree = np.mean((e[live] > 0) == (syn.labels[live] == "H"))
     assert agree > 0.85, agree
+
+
+def test_weighted_counts_a_player_tracked_twice_once():
+    # Home player tracked in two slots at the same spot, away player as far on the other side.
+    ball = np.tile([50.0, 30.0], (30, 1))
+    players = np.zeros((30, 3, 2))
+    players[:, 0] = players[:, 1] = [47.0, 30.0]
+    players[:, 2] = [53.0, 30.0]
+    e = ev.evidence_weighted(Tracking(ball, players, np.array([0, 0, 1])))
+    np.testing.assert_allclose(e, 0.0, atol=1e-9)
