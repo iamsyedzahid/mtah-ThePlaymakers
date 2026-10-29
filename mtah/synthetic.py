@@ -16,6 +16,7 @@ import math
 from typing import NamedTuple
 
 import numpy as np
+from scipy.ndimage import uniform_filter1d
 from scipy.signal import lfilter
 
 from mtah.config import FPS, PITCH_M
@@ -61,6 +62,7 @@ def make_synthetic(n_frames: int = 5_000, seed: int = 0) -> Synthetic:
     offsets = rng.uniform(-0.8, 0.8, size=(S, 2)) * half
     offsets[:, 0] = np.where(team == HOME, -1, 1) * np.abs(offsets[:, 0])
     drift = lfilter([1.0], [1.0, -0.9995], rng.normal(0.0, 0.15, size=(T, S, 2)), axis=0)
+    drift = uniform_filter1d(drift, size=FPS, axis=0)  # smooth paths, not 5 m/s frame-to-frame jitter
     players = np.clip(half + offsets + drift, 0.0, pitch)
 
     def nearest(pool: np.ndarray, frame: int, point: np.ndarray) -> int:
