@@ -75,11 +75,20 @@ def test_tracking_from_frame_rejects_missing_slot_columns():
 def test_cache_round_trip(tmp_path):
     tr = io_atd.tracking_from_frame(_fake_frame(), teams.slot_teams(_fake_teams()), n_frames=N)
     cache = tmp_path / "cache" / "tracking.npz"
-    io_atd._save(cache, tr)
+    io_atd._save(cache, tr, ("Home FC", "Away Club"))
     back = io_atd.load_tracking(cache)
     np.testing.assert_array_equal(back.ball, tr.ball)
     np.testing.assert_array_equal(back.players, tr.players)
     np.testing.assert_array_equal(back.team, tr.team)
+    assert io_atd.team_names(cache) == ("Home FC", "Away Club")
+
+
+def test_old_cache_without_names_is_flagged(tmp_path):
+    tr = io_atd.tracking_from_frame(_fake_frame(), teams.slot_teams(_fake_teams()), n_frames=N)
+    cache = tmp_path / "old.npz"
+    np.savez_compressed(cache, ball=tr.ball, players=tr.players, team=tr.team)  # no names
+    with pytest.raises(RuntimeError, match="predates team names"):
+        io_atd.team_names(cache)
 
 
 def test_summary_is_numbers_only(syn):

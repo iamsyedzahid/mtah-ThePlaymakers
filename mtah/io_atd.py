@@ -58,28 +58,40 @@ def load_tracking(cache: Path | None = None) -> Tracking:
     """The real tactical ATD as a Tracking. Reads `cache` if it exists, else loads and writes it."""
     if cache is not None and Path(cache).is_file():
         with np.load(cache) as saved:
-            return Tracking(saved["ball"], saved["players"], saved["team"], FPS)
-    tracking, _ = _load_from_atd()
+            if "names" in saved.files:  # a cache from before team names were stored is rebuilt
+                return Tracking(saved["ball"], saved["players"], saved["team"], FPS)
+    tracking, names = _load_from_atd()
     if cache is not None:
-        _save(cache, tracking)
+        _save(cache, tracking, names)
     return tracking
+
+
+def team_names(cache: Path) -> tuple[str, str]:
+    """(home, away) club names as the ATD metadata spells them, read from the cache."""
+    with np.load(cache) as saved:
+        if "names" not in saved.files:
+            raise RuntimeError("the cache predates team names; delete outputs/cache/ and reload")
+        home, away = saved["names"].tolist()
+    return str(home), str(away)
 
 
 load = load_tracking  # the name used in the team plan
 
 
-def _load_from_atd() -> tuple[Tracking, Any]:
-    """(Tracking, kloppy metadata.teams) straight from the ATD files. Takes minutes."""
+def _load_from_atd() -> tuple[Tracking, tuple[str, str]]:
+    """(Tracking, (home name, away name)) straight from the ATD files. Takes minutes."""
     from starter.load_atd import load  # needs kloppy; imported here so tests never need it
 
     dataset = load(data_dir=str(data_dir()))
     teams = dataset.metadata.teams
-    return tracking_from_frame(dataset.to_df(), slot_teams(teams)), teams
+    names = (str(teams[0]), str(teams[1]))
+    return tracking_from_frame(dataset.to_df(), slot_teams(teams)), names
 
 
-def _save(cache: Path, tracking: Tracking) -> None:
+def _save(cache: Path, tracking: Tracking, names: tuple[str, str]) -> None:
     Path(cache).parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(cache, ball=tracking.ball, players=tracking.players, team=tracking.team)
+    np.savez_compressed(cache, ball=tracking.ball, players=tracking.players, team=tracking.team,
+                        names=np.array(names))
 
 
 def summary(tracking: Tracking) -> dict[str, float]:
@@ -124,6 +136,14 @@ def summary(tracking: Tracking) -> dict[str, float]:
         graded_stats[f"gap_p{q}_s"] = pct(gaps_s, q)
     graded_stats["gap_max_s"] = float(gaps_s.max()) if gaps_s.size else float("nan")
 
+    # A team with more than 11 tracked objects means referees, duplicates or slots that swap
+    # team: the per-slot team mapping would then be wrong for some frames.
+    seen_slot = ~np.isnan(tracking.players[..., 0])
+    for name, side in (("home", HOME), ("away", AWAY)):
+        per_frame = seen_slot[:, tracking.team == side].sum(axis=1)[graded]
+        graded_stats[f"max_{name}_tracked_graded"] = int(per_frame.max()) if per_frame.size else 0
+        graded_stats[f"frac_{name}_over_11_graded"] = mean(per_frame > 11)
+
     return graded_stats | {
         "n_frames": int(tracking.n_frames),
         "n_slots": int(tracking.team.size),
@@ -154,13 +174,9 @@ if __name__ == "__main__":
     from mtah.ball import ball_clean
 
     cache = default_cache()
-    if cache.is_file():
-        tracking = load_tracking(cache)
-        print("read the cache; delete outputs/cache/ to reload and re-check the team order")
-    else:
-        tracking, teams = _load_from_atd()
-        print(f"home = {teams[0]}, away = {teams[1]}   (DATA.md: home is Barcelona)")
-        _save(cache, tracking)
+    tracking = load_tracking(cache)  # loads the ATD (minutes) only when there is no usable cache
+    home, away = team_names(cache)
+    print(f"home = {home}, away = {away}   (DATA.md: home is Barcelona)")
     for key, value in summary(tracking).items():
         expected = f"   (DATA.md: {EXPECTED[key]})" if key in EXPECTED else ""
         shown = value if isinstance(value, int) else f"{value:.4g}"
