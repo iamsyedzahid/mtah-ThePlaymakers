@@ -3,8 +3,8 @@
 22 players drift around fixed anchors on a corner-origin pitch. The ball sits on a carrier, then
 is passed at PASS_SPEED_MS to a teammate or, on a turnover, intercepted by the nearest opponent.
 To keep it from being too easy, as the real match is not:
-- the ball runs 0.3-1.2 m ahead of its carrier and an opponent presses most carriers from 1-3 m,
-  so the nearest player is not always the owner;
+- the ball runs 0.3-2.5 m from its carrier's tracked position (a body centre, not a foot) and an opponent presses most carriers from 1-3 m, so the nearest player is not always the owner;
+- passes travel at 10-24 m/s and the provider's smoothing spreads each kick over a few frames;
 - some passes clip an opponent on the way (a deflection: no control, possession does not change);
 - many ball gaps start just before a reception, as the real ball is lost most in crowded moments.
 Some turnovers are preceded by a dead-ball spell. About 40% of ball frames are lost, a few ball
@@ -16,20 +16,23 @@ import math
 from typing import NamedTuple
 
 import numpy as np
-from scipy.ndimage import uniform_filter1d
+from scipy.ndimage import gaussian_filter1d, uniform_filter1d
 from scipy.signal import lfilter
 
 from mtah.config import FPS, PITCH_M
 from mtah.interfaces import A, D, H, HOME, AWAY, LABEL_DTYPE, Interval, LabelArray, Tracking
 
 PLAYERS_PER_TEAM = 11
-PASS_SPEED_MS = 22.0  # below ball.SPEED_CAP_MS, so clean passes survive cleaning
+# Shaped by real aggregates only (trusted graded ball): speed p90 14 and p99 23 m/s; a slow ball
+# has its nearest tracked player at a median 1.2 m, and only 44% within 1 m.
+PASS_SPEED_MS = (10.0, 24.0)  # below ball.SPEED_CAP_MS, so clean passes survive cleaning
+PROVIDER_SMOOTH_FRAMES = 2.0  # Gaussian sigma of the provider's ball smoothing
 BALL_NOISE_M = 0.15
 TURNOVER_PROB = 0.15  # chance that a change of carrier goes to the other team
 DEFLECT_PROB = 0.15  # chance that a pass clips an opponent on its way
 PRESS_PROB = 0.7  # chance that an opponent presses the carrier
 PRESS_RANGE_M = (1.0, 3.0)  # presser to carrier
-DRIBBLE_RANGE_M = (0.3, 1.2)  # ball ahead of the carrier, so a presser is sometimes nearer
+DRIBBLE_RANGE_M = (0.3, 2.5)  # ball to the carrier's tracked position, so a presser is sometimes nearer
 SET_PIECE_PROB = 0.4  # chance that a turnover is preceded by a dead-ball spell
 # Ball gaps as measured on the real ATD (graded frames, aggregate only): 40.7% lost in 150 gaps,
 # median 268 frames. An exponential with mean 430 has median 298, close enough.
@@ -56,7 +59,6 @@ def make_synthetic(n_frames: int = 5_000, seed: int = 0) -> Synthetic:
     pitch = np.array(PITCH_M)
     half = pitch / 2
     team = np.repeat([HOME, AWAY], PLAYERS_PER_TEAM).astype(np.int8)
-    step = PASS_SPEED_MS / FPS  # metres per frame
 
     # Players drift around a fixed anchor, home in the left half and away in the right.
     offsets = rng.uniform(-0.8, 0.8, size=(S, 2)) * half
@@ -84,6 +86,7 @@ def make_synthetic(n_frames: int = 5_000, seed: int = 0) -> Synthetic:
         else:
             new = int(rng.choice(np.flatnonzero((team == team[prev]) & (np.arange(S) != prev))))
         a, b = players[start, prev], players[start, new]
+        step = rng.uniform(*PASS_SPEED_MS) / FPS  # metres per frame
         defl = -1
         if not flip and rng.random() < DEFLECT_PROB:  # an opponent near the middle clips it
             defl = nearest(opponents, start, (a + b) / 2)
@@ -143,7 +146,7 @@ def make_synthetic(n_frames: int = 5_000, seed: int = 0) -> Synthetic:
         owner[hold:end] = cur
         if k > 0 and hold < end:
             receptions.append((hold, int(team[cur])))
-    ball += rng.normal(0.0, BALL_NOISE_M, size=(T, 2))
+    ball = gaussian_filter1d(ball, PROVIDER_SMOOTH_FRAMES, axis=0) + rng.normal(0.0, BALL_NOISE_M, size=(T, 2))
     labels = np.where(team[owner] == HOME, H, A).astype(LABEL_DTYPE)
 
     # Some turnovers follow a dead-ball spell that ends when the restart is received. The spell
