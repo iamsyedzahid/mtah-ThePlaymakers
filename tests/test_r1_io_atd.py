@@ -91,6 +91,48 @@ def test_old_cache_without_names_is_flagged(tmp_path):
         io_atd.team_names(cache)
 
 
+def _fake_rows(frame_ids=None):
+    """kloppy's raw EPTS rows (one dict per line): frame_id, ball_x/y, player_<slot>_x/_y/_s."""
+    df = _fake_frame(frame_ids)
+    for record in df.to_dict("records"):
+        row = {"frame_id": record["frame_id"], "ball_x": record["ball_x"], "ball_y": record["ball_y"]}
+        for slot in ("1", "2", "10"):
+            for axis in ("x", "y", "s"):
+                row[f"player_{slot}_{axis}"] = record[f"{slot}_{axis}"]
+        yield row
+
+
+def test_streamed_rows_match_the_dataframe_path():
+    slot_team = teams.slot_teams(_fake_teams())
+    rows = io_atd.tracking_from_rows(_fake_rows(), slot_team, n_frames=N)
+    frame = io_atd.tracking_from_frame(_fake_frame(), slot_team, n_frames=N)
+    np.testing.assert_array_equal(rows.ball, frame.ball)
+    np.testing.assert_array_equal(rows.players, frame.players)
+    np.testing.assert_array_equal(rows.team, frame.team)
+
+
+@pytest.mark.parametrize("frame_ids", [[0, 1, 2, 3, 4, 5], [1, 2, 3, 4, 5], [1, 2, 3, 4, 5, 5], [1, 2, 3, 4, 5, 7]])
+def test_streamed_rows_reject_bad_frame_ids(frame_ids):
+    with pytest.raises(ValueError):
+        io_atd.tracking_from_rows(_fake_rows(frame_ids), {"1": 0, "2": 1}, n_frames=N)
+
+
+def test_streamed_rows_reject_unknown_slots():
+    with pytest.raises(ValueError, match="no x/y fields"):
+        io_atd.tracking_from_rows(_fake_rows(), {"1": 0, "99": 1}, n_frames=N)
+
+
+def test_check_against_kloppy_passes_and_fails_without_showing_values():
+    slot_team = teams.slot_teams(_fake_teams())
+    tr = io_atd.tracking_from_rows(_fake_rows(), slot_team, n_frames=N)
+    io_atd._check_against(tr, _fake_frame(), slot_team)  # identical: no error
+    bad = _fake_frame()
+    bad.loc[0, "2_x"] += 0.01
+    with pytest.raises(RuntimeError) as err:
+        io_atd._check_against(tr, bad, slot_team)
+    assert "2_x" in str(err.value) and "0.0" not in str(err.value)  # names only, no numbers
+
+
 def test_summary_is_numbers_only(syn):
     stats = io_atd.summary(syn.tracking)
     assert all(type(v) in (int, float) for v in stats.values())
