@@ -76,6 +76,20 @@ class Touch(NamedTuple):
     kind: TouchKind
 
 
+class SetPiece(NamedTuple):
+    """A Smart Tagging set piece (R3), as evidence for R4, never as a label.
+
+    start..end (inclusive frames) is the tagged window around the restart, about 5 s, not a
+    dead-ball interval. team is the Team tag mapped to 0 (home) / 1 (away), or None where the tag
+    says N/A (every throw-in). kind is the Type tag as written, e.g. "Throw-in".
+    """
+
+    start: int
+    end: int
+    team: int | None
+    kind: str
+
+
 def ball_clean(ball: FloatArray) -> tuple[FloatArray, BoolArray]:
     """Clean the ball track so downstream geometry never sees NaN.
 
@@ -94,10 +108,12 @@ def gap_stats(lost_mask: BoolArray, fps: int = FPS) -> dict[str, float]:
 
 
 def evidence(tracking: Tracking) -> FloatArray:
-    """Per-frame possession evidence, e [T] float.
+    """Per-frame control evidence, e [T] float in [-1, 1].
 
-    Positive favours home, negative favours away, 0 means no information. Always finite. Frames
-    where the ball is missing are 0.
+    e = 2 * p_home - 1, where p_home is the share of control a soft score gives home: a fixed,
+    bounded scale, so R4's switching cost means the same everywhere. Positive favours home,
+    negative favours away, 0 means no information. Always finite. Frames where ball_clean's
+    lost_mask is True are exactly 0.
     """
     raise NotImplementedError("contract only; see mtah/evidence.py")
 
@@ -120,9 +136,11 @@ def dead_mask(T: int, set_piece_intervals: Sequence[Interval]) -> BoolArray:
 
     Intervals outside [0, T) raise. A silently clipped interval hides an off-by-one.
 
-    D follows the referee, not tracking loss. Valid sources for intervals: set-piece tags, the
-    second-half block before kick-off (config.SECOND_HALF_D_BLOCK), and a long still or absent
-    ball. A missing ball alone is never a reason.
+    D follows the referee, not tracking loss. Valid sources for intervals: the second-half block
+    before kick-off (config.SECOND_HALF_D_BLOCK), a long still or absent ball, and set pieces. A
+    Smart Tagging set piece (SetPiece) is a window AROUND the restart and partly live play: only
+    the part before the ball is put back in play is D, and R4 finds that moment inside the window.
+    Never pass a tag window here whole. A missing ball alone is never a reason.
     """
     raise NotImplementedError("contract only; see mtah/deadball.py")
 
