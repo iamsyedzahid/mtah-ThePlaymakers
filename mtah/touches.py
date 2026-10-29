@@ -112,3 +112,19 @@ def _control(frame: int, side: int, dist: FloatArray, team: IntArray, trusted, s
     if later.size and later[0] < SLOW_AFTER_MS:
         return "reception"
     return "deflection"
+
+
+if __name__ == "__main__":
+    # Real data: run this yourself. Prints counts only, for a plausibility check.
+    from mtah.config import GRADED_HALVES
+    from mtah.io_atd import default_cache, load_tracking
+
+    tracking = load_tracking(default_cache())
+    events = touches(tracking.ball, tracking.players, tracking.team)
+    graded = [e for e in events if any(a <= e.frame <= b for a, b in GRADED_HALVES)]
+    minutes = sum(b - a + 1 for a, b in GRADED_HALVES) / FPS / 60
+    rec = sum(e.kind == "reception" for e in graded)
+    print(f"graded touches {len(graded)} ({len(graded) / minutes:.1f} per minute): "
+          f"receptions {rec}, deflections {len(graded) - rec}")
+    print(f"receptions by home {sum(e.kind == 'reception' and e.team == 0 for e in graded)}, "
+          f"by away {sum(e.kind == 'reception' and e.team == 1 for e in graded)}")
