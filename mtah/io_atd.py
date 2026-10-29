@@ -1,13 +1,18 @@
 """Load the tactical ATD into a Tracking (R1).
 
-File parsing is reused from starter/load_atd.py (kloppy's FIFA/EPTS reader). This module adds what
-the pipeline depends on: frame_id - 1 indexing, 0..1 coordinates to metres, slots to home/away.
+Parsing is kloppy's own FIFA/EPTS line reader (the one behind starter/load_atd.py), but streamed:
+each line goes straight into numpy arrays, about 150 MB in all. kloppy's full load builds a Python
+object per player per frame and then a table, which runs out of memory on a laptop. To prove the
+streamed reader is right without anyone looking at data, the first VERIFY_FRAMES frames are also
+loaded the official way and compared automatically; any difference stops the load.
+
+This module adds what the pipeline depends on: frame_id - 1 indexing, 0..1 coordinates to metres,
+slots to home/away.
 
     python -m mtah.io_atd        # load the real ATD, cache it, print aggregate numbers only
 
-kloppy takes minutes on the full match, so the check above writes a cache under outputs/cache/
-(gitignored, and too big for scripts/check_repo.sh to let through). The data/ folder stays exactly
-as games.py expects. Delete the cache file to rebuild it.
+The cache lives in outputs/cache/ (gitignored, and too big for scripts/check_repo.sh to let
+through), so the data/ folder stays exactly as games.py expects. Delete the cache to rebuild it.
 """
 from pathlib import Path
 from typing import Any
@@ -18,6 +23,8 @@ from mtah.ball import SPEED_CAP_MS, _gaps
 from mtah.config import FPS, GRADED_HALVES, N_FRAMES, PITCH_M, data_dir
 from mtah.interfaces import AWAY, HOME, Tracking
 from mtah.teams import slot_teams
+
+VERIFY_FRAMES = 300  # frames also loaded the official kloppy way, to check the streamed reader
 
 
 def default_cache() -> Path:
@@ -37,7 +44,7 @@ def tracking_from_frame(
     if len(ids) != n_frames or not np.array_equal(np.sort(ids), np.arange(1, n_frames + 1)):
         raise ValueError(f"frame_id must be exactly 1..{n_frames}, got {len(ids)} records "
                          f"spanning {ids.min() if len(ids) else None}..{ids.max() if len(ids) else None}")
-    slots = sorted(slot_team, key=lambda s: (0, int(s), s) if s.isdigit() else (1, 0, s))
+    slots = _sorted_slots(slot_team)
     missing = [s for s in slots if f"{s}_x" not in df.columns or f"{s}_y" not in df.columns]
     if missing:
         raise ValueError(f"no x/y columns for slots {missing[:5]}; columns start {list(df.columns[:8])}")
@@ -52,6 +59,42 @@ def tracking_from_frame(
     players = np.stack([metres(s) for s in slots], axis=1)
     team = np.array([slot_team[s] for s in slots], dtype=np.int8)
     return Tracking(ball, players, team, FPS)
+
+
+def tracking_from_rows(
+    rows: Any, slot_team: dict[str, int], n_frames: int = N_FRAMES, pitch_m: tuple = PITCH_M
+) -> Tracking:
+    """Build a Tracking from kloppy's raw EPTS rows, streamed one dict per line.
+
+    Each row has frame_id (1-based), ball_x, ball_y and player_<slot>_x, player_<slot>_y, all in
+    0..1, NaN when missing. Every frame_id 1..n_frames must appear exactly once.
+    """
+    slots = _sorted_slots(slot_team)
+    keys = [(f"player_{s}_x", f"player_{s}_y") for s in slots]
+    ball = np.full((n_frames, 2), np.nan)
+    players = np.full((n_frames, len(slots), 2), np.nan)
+    seen = np.zeros(n_frames, dtype=bool)
+    nan = float("nan")
+    for row in rows:
+        if not seen.any():
+            missing = [s for s, (kx, ky) in zip(slots, keys) if kx not in row or ky not in row]
+            if missing:
+                raise ValueError(f"no x/y fields for slots {missing[:5]}; fields start {list(row)[:6]}")
+        f = int(row["frame_id"]) - 1
+        if not 0 <= f < n_frames or seen[f]:
+            raise ValueError(f"frame_id {f + 1} is outside 1..{n_frames} or repeated")
+        seen[f] = True
+        ball[f] = (row.get("ball_x", nan), row.get("ball_y", nan))
+        players[f] = [(row[kx], row[ky]) for kx, ky in keys]
+    if not seen.all():
+        raise ValueError(f"{int((~seen).sum())} frame_ids of 1..{n_frames} never appear")
+    scale = np.asarray(pitch_m, dtype=float)
+    team = np.array([slot_team[s] for s in slots], dtype=np.int8)
+    return Tracking(ball * scale, players * scale, team, FPS)
+
+
+def _sorted_slots(slot_team: dict[str, int]) -> list[str]:
+    return sorted(slot_team, key=lambda s: (0, int(s), s) if s.isdigit() else (1, 0, s))
 
 
 def load_tracking(cache: Path | None = None) -> Tracking:
@@ -79,13 +122,40 @@ load = load_tracking  # the name used in the team plan
 
 
 def _load_from_atd() -> tuple[Tracking, tuple[str, str]]:
-    """(Tracking, (home name, away name)) straight from the ATD files. Takes minutes."""
-    from starter.load_atd import load  # needs kloppy; imported here so tests never need it
+    """(Tracking, (home name, away name)) streamed from the ATD files, checked against kloppy."""
+    # kloppy is imported here so tests never need it
+    from kloppy import metrica
+    from kloppy.infra.serializers.tracking.metrica_epts.metadata import load_metadata
+    from kloppy.infra.serializers.tracking.metrica_epts.reader import read_raw_data
+    from starter.load_atd import atd_paths
 
-    dataset = load(data_dir=str(data_dir()))
-    teams = dataset.metadata.teams
-    names = (str(teams[0]), str(teams[1]))
-    return tracking_from_frame(dataset.to_df(), slot_teams(teams)), names
+    meta_path, raw_path = atd_paths(data_dir=str(data_dir()))
+    with open(meta_path, "rb") as handle:
+        metadata = load_metadata(handle)
+    slot_team = slot_teams(metadata.teams)
+    with open(raw_path, "rb") as handle:
+        tracking = tracking_from_rows(read_raw_data(handle, metadata, sample_rate=1.0, limit=0), slot_team)
+
+    head = metrica.load_tracking_epts(meta_data=meta_path, raw_data=raw_path, limit=VERIFY_FRAMES)
+    _check_against(tracking, head.to_df(), slot_team)
+    return tracking, (str(metadata.teams[0]), str(metadata.teams[1]))
+
+
+def _check_against(tracking: Tracking, df: Any, slot_team: dict[str, int]) -> None:
+    """Stop if the streamed arrays differ from kloppy's own load on the frames in df.
+
+    The message names columns only, never values, so it is safe to share.
+    """
+    rows = df["frame_id"].to_numpy(dtype=int) - 1
+    scale = np.asarray(PITCH_M, dtype=float)
+    pairs = [("ball", tracking.ball)] + [
+        (s, tracking.players[:, i]) for i, s in enumerate(_sorted_slots(slot_team))
+    ]
+    for prefix, ours in pairs:
+        theirs = df[[f"{prefix}_x", f"{prefix}_y"]].to_numpy(dtype=float)
+        if not np.allclose(ours[rows] / scale, theirs, equal_nan=True):
+            raise RuntimeError(f"streamed reader disagrees with kloppy on {prefix}_x/{prefix}_y "
+                               f"in the first {len(rows)} frames; do not use this cache")
 
 
 def _save(cache: Path, tracking: Tracking, names: tuple[str, str]) -> None:
