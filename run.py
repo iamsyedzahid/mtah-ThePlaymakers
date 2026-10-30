@@ -12,26 +12,27 @@ from typing import Sequence
 import numpy as np
 
 from mtah.ball import ball_clean, gap_stats
-from mtah.config import N_FRAMES
-from mtah.deadball import dead_mask
+from mtah.config import N_FRAMES, SECOND_HALF_D_BLOCK
+from mtah.deadball import dead_intervals, dead_mask
 from mtah.evidence import evidence
-from mtah.interfaces import X, Interval, LabelArray, Tracking
+from mtah.interfaces import X, LabelArray, SetPiece, Tracking
 from mtah.segment import segment
 from mtah.synthetic import make_synthetic
 from mtah.touches import touches
-from mtah.xpolicy import to_x_policy
 
 DEFAULT_OUT = Path(__file__).resolve().parent / "outputs" / "synthetic.csv"
 
 
-def predict(tracking: Tracking, set_piece_intervals: Sequence[Interval]) -> LabelArray:
-    _, lost = ball_clean(tracking.ball)
+def predict(tracking: Tracking, set_pieces: Sequence[SetPiece]) -> LabelArray:
+    """Labels H/A/D, never X: the scorer fills an X with the previous label for spellF1 but
+    counts it as a miss frame by frame, so abstaining can only lose."""
+    filled, lost = ball_clean(tracking.ball)
     e = evidence(tracking)
     events = touches(tracking.ball, tracking.players, tracking.team)
-    dead = dead_mask(tracking.n_frames, set_piece_intervals)
-    labels = segment(e, lost, dead, events)
-    # Abstain only where there is no evidence at all; to_x_policy keeps X away from hand-overs.
-    return to_x_policy(labels, confidence=np.abs(e), threshold=1e-9)
+    intervals = dead_intervals(set_pieces, filled, lost)
+    if tracking.n_frames == N_FRAMES:  # the real match: the second half kicks off late (FAQ.md)
+        intervals.append(SECOND_HALF_D_BLOCK)
+    return segment(e, lost, dead_mask(tracking.n_frames, intervals), events)
 
 
 def write_csv(labels: LabelArray, out: Path) -> None:
@@ -42,7 +43,7 @@ def write_csv(labels: LabelArray, out: Path) -> None:
 
 def main(out: Path = DEFAULT_OUT, n_frames: int = N_FRAMES, seed: int = 0) -> LabelArray:
     syn = make_synthetic(n_frames, seed)
-    labels = predict(syn.tracking, syn.set_piece_intervals)
+    labels = predict(syn.tracking, syn.set_pieces)
     write_csv(labels, out)
 
     stats = gap_stats(np.isnan(syn.tracking.ball).any(axis=1))

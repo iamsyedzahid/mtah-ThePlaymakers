@@ -7,7 +7,9 @@ To keep it from being too easy, as the real match is not:
 - passes travel at 10-24 m/s and the provider's smoothing spreads each kick over a few frames;
 - some passes clip an opponent on the way (a deflection: no control, possession does not change);
 - many ball gaps start just before a reception, as the real ball is lost most in crowded moments.
-Some turnovers are preceded by a dead-ball spell. About 40% of ball frames are lost, a few ball
+Some turnovers are preceded by a dead-ball spell: the ball rests where the restart is taken, and
+a Smart-Tagging-like window of 3-7 s sits around the restart (partly live play, as the real tags
+are), naming the team that takes it or, as on every real throw-in, no team. About 40% of ball frames are lost, a few ball
 samples are glitches, and about 7% of player positions are missing. As in the real ATD (DATA.md),
 the 22 players are spread over 46 anonymous slots: a track breaks now and then and the player
 reappears in a free slot of the same team.
@@ -20,7 +22,7 @@ from scipy.ndimage import gaussian_filter1d, uniform_filter1d
 from scipy.signal import lfilter
 
 from mtah.config import FPS, PITCH_M
-from mtah.interfaces import A, D, H, HOME, AWAY, LABEL_DTYPE, Interval, LabelArray, Tracking
+from mtah.interfaces import A, D, H, HOME, AWAY, LABEL_DTYPE, Interval, LabelArray, SetPiece, Tracking
 
 PLAYERS_PER_TEAM = 11
 # Shaped by real aggregates only (trusted graded ball): speed p90 14 and p99 23 m/s; a slow ball
@@ -34,6 +36,8 @@ PRESS_PROB = 0.7  # chance that an opponent presses the carrier
 PRESS_RANGE_M = (1.0, 3.0)  # presser to carrier
 DRIBBLE_RANGE_M = (0.3, 2.5)  # ball to the carrier's tracked position, so a presser is sometimes nearer
 SET_PIECE_PROB = 0.4  # chance that a turnover is preceded by a dead-ball spell
+TAG_BEFORE_S, TAG_AFTER_S = (2, 4), (1, 3)  # tag window around the restart, as about 5 s real tags
+TAG_NO_TEAM_PROB = 0.4  # real throw-in tags have no team
 # Ball gaps as measured on the real ATD (graded frames, aggregate only): 40.7% lost in 150 gaps,
 # median 268 frames. An exponential with mean 430 has median 298, close enough.
 BALL_LOST_FRAC = 0.407
@@ -51,6 +55,7 @@ class Synthetic(NamedTuple):
     set_piece_intervals: list[Interval]
     receptions: list[tuple[int, int]]  # (frame, team) where a carrier takes control
     deflections: list[tuple[int, int]]  # (frame, team) where an opponent clips a pass
+    set_pieces: list[SetPiece]  # tag-like windows around each restart, never the D interval itself
 
 
 def make_synthetic(n_frames: int = 5_000, seed: int = 0) -> Synthetic:
@@ -149,16 +154,26 @@ def make_synthetic(n_frames: int = 5_000, seed: int = 0) -> Synthetic:
     ball = gaussian_filter1d(ball, PROVIDER_SMOOTH_FRAMES, axis=0) + rng.normal(0.0, BALL_NOISE_M, size=(T, 2))
     labels = np.where(team[owner] == HOME, H, A).astype(LABEL_DTYPE)
 
-    # Some turnovers follow a dead-ball spell that ends when the restart is received. The spell
-    # leaves at least 1 s of the previous possession visible, so it cannot swallow it.
+    # Some turnovers follow a dead-ball spell that ends when the restart is kicked: the previous
+    # team restarts and the other team wins the ball from it. The spell leaves at least 1 s of
+    # the previous possession visible, so it cannot swallow it. Meanwhile the ball rests where the
+    # restart is taken.
     intervals: list[Interval] = []
+    set_pieces: list[SetPiece] = []
     for k in np.flatnonzero(team[carriers[1:]] != team[carriers[:-1]]) + 1:
         if rng.random() < SET_PIECE_PROB:
-            earliest = starts[k - 1] + travel[k - 1] + FPS
-            lo = max(starts[k] - int(rng.integers(2 * FPS, 8 * FPS)), earliest)
-            hi = min(starts[k] + travel[k] - 1, T - 1)
-            intervals.append((lo, hi))
-            labels[lo : hi + 1] = D
+            restart = starts[k]
+            lo = max(restart - int(rng.integers(2 * FPS, 8 * FPS)), starts[k - 1] + travel[k - 1] + FPS)
+            if lo >= restart:
+                continue
+            intervals.append((lo, restart - 1))
+            labels[lo:restart] = D
+            ball[lo:restart] = ball[restart] + rng.normal(0.0, 0.05, size=(restart - lo, 2))
+            side = None if rng.random() < TAG_NO_TEAM_PROB else int(team[carriers[k - 1]])
+            set_pieces.append(SetPiece(
+                max(restart - int(rng.integers(TAG_BEFORE_S[0] * FPS, TAG_BEFORE_S[1] * FPS)), 0),
+                min(restart + int(rng.integers(TAG_AFTER_S[0] * FPS, TAG_AFTER_S[1] * FPS)), T - 1),
+                side, "Throw-in" if side is None else "Free Kick"))
 
     # Ball tracking: alternating seen and lost spells of exponential length; many gaps are moved
     # to start just before the next reception, where play is crowded.
@@ -181,7 +196,7 @@ def make_synthetic(n_frames: int = 5_000, seed: int = 0) -> Synthetic:
     players[rng.random((T, S)) < PLAYER_LOST_FRAC] = np.nan
 
     slots, slot_team = _to_slots(players, team, rng)
-    return Synthetic(Tracking(ball, slots, slot_team, FPS), labels, intervals, receptions, deflections)
+    return Synthetic(Tracking(ball, slots, slot_team, FPS), labels, intervals, receptions, deflections, set_pieces)
 
 
 def _to_slots(players: np.ndarray, team: np.ndarray, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:

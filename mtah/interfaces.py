@@ -145,16 +145,26 @@ def dead_mask(T: int, set_piece_intervals: Sequence[Interval]) -> BoolArray:
     raise NotImplementedError("contract only; see mtah/deadball.py")
 
 
+def dead_intervals(set_pieces: Sequence[SetPiece], ball: FloatArray, lost_mask: BoolArray) -> list[Interval]:
+    """Inclusive D intervals found from set-piece tag windows and ball_clean's output.
+
+    One interval per tag: the part of the window before the ball is put back in play, reaching
+    back to when the ball went quiet, as dead_mask's rules require. Tags outside [0, T) raise.
+    """
+    raise NotImplementedError("contract only; see mtah/deadball.py")
+
+
 def segment(
     e: FloatArray, lost_mask: BoolArray, dead_mask: BoolArray, touches: Sequence[Touch]
 ) -> LabelArray:
     """Turn evidence and touches into labels [T] in {H, A, D}. Never X.
 
-    Rules, because spellF1 scores whole possessions (1 frame late is free, 1 s late scores ~0.65):
+    Rules, because spellF1 matches whole possessions by overlap, so a false flip costs a spell:
     - dead_mask frames are D, and only those. D splits possessions: H D H is two possessions;
     - while the ball is alive there is always a team. A loose ball stays with the last team;
-    - possession flips only on a reception, at the reception's own frame. Deflections never flip;
-    - possession holds through lost frames;
+    - possession flips only at a reception, or after a dead ball, and the evidence after a
+      reception decides whether it is believed. Evidence alone and deflections never flip;
+    - possession holds through lost frames. A change just after a lost stretch is placed inside it;
     - no flicker: very short H/A runs are absorbed by a neighbour.
     """
     raise NotImplementedError("contract only; see mtah/segment.py")
