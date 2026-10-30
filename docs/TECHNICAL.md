@@ -77,6 +77,13 @@ Tried and dropped:
 - Abstaining with X. It counts as a miss under macroF1 and gains nothing under spellF1.
 - A slow-players limit of 1.25 m/s. It gave similar spell counts to 1.0 m/s on the real match, and a
   false D costs a whole possession, so the stricter limit stayed.
+- Team spread to find changes inside ball gaps. The team with the ball spreads out: against our own
+  output, with no ground truth, the spread gap between the teams scored an AUC of 0.76-0.79 with the
+  ball visible and 0.70-0.73 inside gaps. As a flip rule it was not enough. At its best setting, on 56
+  gaps, it caught 6 of 16 changes but wrongly flipped 5 of 40 unchanged gaps, for 73% accuracy against
+  71% for keeping the team.
+- Looking up to 5 s after a gap for a hidden change, and treating clear evidence as the ball reappears
+  as a reception. Both lowered spellF1 slightly on synthetic data.
 
 ## Training data
 
@@ -119,8 +126,9 @@ changed as a result.
 - **Validated on synthetic data.** With no labels to tune on, the thresholds are checked against a
   generator we wrote, which cannot contain what we did not think of.
 
-With more time we would use player formations around restarts to find stoppages, and estimate from
-team shape when a change happened inside a ball gap.
+With more time we would use player formations around restarts to find stoppages, and try team spread
+as a soft signal in possession decisions rather than a flip rule. It carries real information, but we
+had no labelled way to validate such a change.
 
 ### Results we can state
 
