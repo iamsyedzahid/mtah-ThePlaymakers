@@ -106,9 +106,9 @@ changed as a result.
 ## Limitations
 
 - **Hidden changes.** About 41% of the ball is missing, and a change inside a gap can only be placed by
-  estimate. On synthetic data this is the largest loss: spellF1 is 0.62 for the full pipeline, 0.67 with
-  true dead-ball intervals, and over 0.9 with true receptions as well. Those are comparisons between
-  versions, not estimates of the real score.
+  estimate. On synthetic data this is the largest loss: spellF1 is 0.59 for the full pipeline, 0.66 with
+  true dead-ball intervals, 0.83 with true receptions and 0.93 with both. Those are comparisons between
+  versions, not estimates of the real score, and differences of about 0.03 are noise.
 - **Dead ball is inferred.** Slow players can also mean slow live build-up, which the rule would call
   dead, and stoppages with quick players are missed. In the public 5 minutes only 8% of D frames were
   found, though 98% of the frames marked D were right. Our graded D share is 25.7%, so this window may
@@ -136,7 +136,7 @@ that the pipeline is aligned and its labels mean what they should.
 
 ## Reproduction
 
-Needs Python 3.15 and the data bundle. No GPU, and about a minute of runtime after the first run.
+Needs Python 3.15 and the data bundle. No GPU.
 
 ```
 python -m venv .venv
