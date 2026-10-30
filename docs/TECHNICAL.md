@@ -19,6 +19,7 @@ ATD ------> ball cleaning ---> evidence (who is near the ball) ---+
     |                                                                          |
     +-----> player speed --+                                                   |
 Smart Tagging set pieces --+--> dead ball -------------------------------------+
+Homography (camera) -------+
 ```
 
 **Ball cleaning** (`mtah/ball.py`). Samples implying over 40 m/s are dropped, as a hard shot reaches
@@ -48,7 +49,10 @@ first time. Any other touch is a deflection and never flips possession.
    for 1 s, or rests for 7 s, which is longer than the 6 s a goalkeeper may hold it.
 3. *Ball missing and players slow.* The median tracked player stays under 1.0 m/s for 5 s, overlapping
    a missing ball by at least 3 s.
-4. *The second-half block before kick-off*, published in FAQ.md. This is the only frame-specific fact
+4. *Ball missing, camera still and players slowish.* The homography gives where the camera looks. It
+   mostly stops at a stoppage but also often in live play, so it counts only with the median player
+   under 1.5 m/s, both held for 8 s, overlapping a missing ball by at least 3 s.
+5. *The second-half block before kick-off*, published in FAQ.md. This is the only frame-specific fact
    in the pipeline.
 
 D stretches under 3 s apart are joined, as a glimpse of the ball inside a stoppage is not a possession.
@@ -67,8 +71,8 @@ stretch is placed halfway into that stretch. H/A runs under 1 s are absorbed by 
 | Smart Tagging, `Set Pieces` only | Evidence for restarts: window and team |
 | Tactical video | Not used |
 | Broadcast video and ATD | Not used: no mapping to the tactical frame index |
-| Homography | Not used: the ATD is already in pitch coordinates |
-| Smart Tagging phases (Build Up, Transition and so on) | Not used: they are phases, not possessions (DATA.md) |
+| Tactical homography | Only to tell when the camera is still, as a stoppage cue. The ATD is already in pitch coordinates |
+| Smart Tagging phases (Build Up, Transition and so on) | Tested, not used: see below |
 | ATD speed channel | Not used: speeds are computed from positions |
 
 Tried and dropped:
@@ -86,6 +90,15 @@ Tried and dropped:
   71% for keeping the team.
 - Looking up to 5 s after a gap for a hidden change, and treating clear evidence as the ball reappears
   as a reception. Both lowered spellF1 slightly on synthetic data.
+- Smart Tagging phases as a vote across ball gaps. They agree with our output on 77% of the visible
+  frames they cover, from 62% (`PLAYERS IN THE BOX`) to 89% (`PROGRESSION`). Flipping on all of them was
+  worse than keeping the team (64% against 71%, on 56 gaps). Using only `BUILD UP` and `PROGRESSION` gave
+  75%, but that was 3 changes caught and 1 wrong flip, on codes picked after seeing the data, and those
+  changes were ones the pipeline already finds when the ball returns.
+- The camera as a ball locator. It is further from the ball (median 24 m) than the players' average
+  position (20 m).
+- A still camera alone as a stoppage cue. It wrongly caught 5-38% of fast-ball frames, depending on the
+  setting. Requiring slowish players as well brought the chosen setting to 1.5%.
 
 ## Training data
 
@@ -96,8 +109,9 @@ the real tracking, and from a seeded synthetic match generator in `mtah/syntheti
 same aggregates. Those statistics are counts and percentiles computed without any labels. Settings were
 compared by the official scorer on synthetic truth only.
 
-**The public 5 minutes** were scored once, on the frozen design, to check correctness. Nothing was
-changed as a result.
+**The public 5 minutes** were scored once, to check correctness. Nothing was changed as a result. The
+still-camera rule was added afterwards, on a pass-or-fail bar set in advance from label-free statistics
+of the real tracking, and its version was not scored on the public window.
 
 ## Possession rules
 
@@ -118,10 +132,11 @@ changed as a result.
   estimate. On synthetic data this is the largest loss: spellF1 is 0.59 for the full pipeline, 0.66 with
   true dead-ball intervals, 0.83 with true receptions and 0.93 with both. Those are comparisons between
   versions, not estimates of the real score, and differences of about 0.03 are noise.
-- **Dead ball is inferred.** Slow players can also mean slow live build-up, which the rule would call
-  dead, and stoppages with quick players are missed. In the public 5 minutes only 8% of D frames were
-  found, though 98% of the frames marked D were right. Our graded D share is 25.7%, so this window may
-  be unusual, but one window cannot show that.
+- **Dead ball is inferred.** Slow players can also mean slow live build-up, which the rules would call
+  dead, and stoppages with quick players are missed. The still-camera rule cannot be scored at all, as
+  synthetic matches have no real camera. In the public 5 minutes the version before that rule found only
+  8% of D frames, though 98% of the frames marked D were right. Its graded D share was 25.7%, so this
+  window may be unusual, but one window cannot show that.
 - **Most exact transitions are missed.** In the public 5 minutes 2 of 20 fell within 25 frames.
 - **2D only.** There is no ball height, so a ball in the air passing over a player can look close.
 - **Team, not player.** Pressers near the ball can cause false receptions. Evidence removes some of them.
@@ -136,10 +151,10 @@ had no labelled way to validate such a change.
 
 | | Value |
 |---|---|
-| Public 5 minutes, spellF1 | 0.4400 |
-| Public 5 minutes, macroF1 | 0.5623 |
-| Graded frames, H / A / D | 43.5% / 30.8% / 25.7% |
-| Possessions in the graded halves | 265 |
+| Public 5 minutes, spellF1 (version before the still-camera rule) | 0.4400 |
+| Public 5 minutes, macroF1 (same version) | 0.5623 |
+| Graded frames, H / A / D | 42.4% / 29.6% / 28.0% |
+| Possessions in the graded halves | 268 |
 
 The public window does not predict the full-match score (EVALUATION.md). The first two rows show only
 that the pipeline is aligned and its labels mean what they should.
