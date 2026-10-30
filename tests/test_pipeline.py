@@ -26,6 +26,8 @@ T = 3_000
         (deadball, "dead_intervals"),
         (deadball, "untagged_intervals"),
         (deadball, "slow_lost_intervals"),
+        (deadball, "join_close"),
+        (deadball, "restart_touches"),
         (segment, "segment"),
         (xpolicy, "to_x_policy"),
     ],

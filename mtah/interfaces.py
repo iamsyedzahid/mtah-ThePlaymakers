@@ -110,8 +110,9 @@ def gap_stats(lost_mask: BoolArray, fps: int = FPS) -> dict[str, float]:
 def evidence(tracking: Tracking) -> FloatArray:
     """Per-frame control evidence, e [T] float in [-1, 1].
 
-    e = 2 * p_home - 1, where p_home is the share of control a soft score gives home: a fixed,
-    bounded scale, so R4's switching cost means the same everywhere. Positive favours home,
+    e = (c_home - c_away) / (c_home + c_away + c0), from each team's soft control score and a fixed
+    "nobody" score c0: when someone is close this is 2 * p_home - 1, and it fades to 0 for a loose
+    ball. A fixed, bounded scale, so R4's costs mean the same everywhere. Positive favours home,
     negative favours away, 0 means no information. Always finite. Frames where ball_clean's
     lost_mask is True are exactly 0.
     """
@@ -124,8 +125,10 @@ def touches(ball: FloatArray, players: FloatArray, team: IntArray) -> list[Touch
     Takes the raw ball, NaN included: a frame without a ball position cannot hold a touch, and
     interpolated positions would invent touches. Every frame is in [0, T).
 
-    A "reception" means control: sustained proximity plus a touch event, not distance alone. A
-    single touch, a deflected pass that is not intercepted and a won header without control are
+    A "reception" means control: the ball staying near one team's player and moving with them, not
+    distance alone. It may have no sharp touch, as the provider smooths the ball. A touch followed
+    by its own team's control is also a reception (an interception played first time). A single
+    touch, a deflected pass that is not intercepted and a won header without control are
     "deflection".
     """
     raise NotImplementedError("contract only; see mtah/touches.py")
@@ -151,6 +154,16 @@ def dead_intervals(set_pieces: Sequence[SetPiece], ball: FloatArray, lost_mask: 
     One interval per tag: the part of the window before the ball is put back in play, reaching
     back to when the ball went quiet, as dead_mask's rules require. Tags outside [0, T) raise.
     """
+    raise NotImplementedError("contract only; see mtah/deadball.py")
+
+
+def join_close(mask: BoolArray) -> BoolArray:
+    """A dead mask with live stretches under about 3 s between two dead ones filled in."""
+    raise NotImplementedError("contract only; see mtah/deadball.py")
+
+
+def restart_touches(set_pieces: Sequence[SetPiece], intervals: Sequence[Interval], T: int) -> list[Touch]:
+    """A reception at each restart whose tag names a team. intervals are dead_intervals' output."""
     raise NotImplementedError("contract only; see mtah/deadball.py")
 
 
@@ -194,6 +207,9 @@ def to_x_policy(
     margin: int = FPS,
 ) -> LabelArray:
     """Replace low-confidence frames with X, but only in the middle of a possession.
+
+    Not used by run.predict, which never abstains: an X is a miss under macroF1 and gains nothing
+    under spellF1. Kept for anyone who wants to try abstaining.
 
     spellF1 fills an X with the last label in the half, so an X inside a run is free, while an X
     at the start of a run delays the hand-over. So X only replaces an H or A frame at least

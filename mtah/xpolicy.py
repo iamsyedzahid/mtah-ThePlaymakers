@@ -1,4 +1,7 @@
-"""Abstain policy (R4). X only inside a possession, never near a hand-over."""
+"""Abstain policy (R4). X only inside a possession, never near a hand-over.
+
+Not used by run.predict: an X is a miss under macroF1 and gains nothing under spellF1.
+"""
 import numpy as np
 
 from mtah.config import FPS
