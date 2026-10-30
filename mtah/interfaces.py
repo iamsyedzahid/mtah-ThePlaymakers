@@ -157,6 +157,14 @@ def dead_intervals(set_pieces: Sequence[SetPiece], ball: FloatArray, lost_mask: 
     raise NotImplementedError("contract only; see mtah/deadball.py")
 
 
+def camera_still_intervals(matrices: npt.NDArray[np.float64], players: FloatArray, lost_mask: BoolArray) -> list[Interval]:
+    """Inclusive D intervals where the ball is missing, the camera is still and players are slowish.
+
+    matrices [T, 3, 3] is the per-frame homography, normalised pitch to pixels, NaN where invalid.
+    """
+    raise NotImplementedError("contract only; see mtah/deadball.py")
+
+
 def join_close(mask: BoolArray) -> BoolArray:
     """A dead mask with live stretches under about 3 s between two dead ones filled in."""
     raise NotImplementedError("contract only; see mtah/deadball.py")

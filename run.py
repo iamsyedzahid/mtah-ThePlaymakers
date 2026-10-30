@@ -18,6 +18,7 @@ import numpy as np
 from mtah.ball import ball_clean, gap_stats
 from mtah.config import GRADED_HALVES, N_FRAMES, SECOND_HALF_D_BLOCK
 from mtah.deadball import (
+    camera_still_intervals,
     dead_intervals,
     dead_mask,
     join_close,
@@ -49,15 +50,19 @@ def predict(tracking: Tracking, set_pieces: Sequence[SetPiece], extra_dead: Sequ
 
 
 def predict_real() -> LabelArray:
-    """The real match. Its one frame-specific fact is published: the second half kicks off late (FAQ.md)."""
+    """The real match. It adds what synthetic matches lack: the homography's still-camera stoppages, and
+    its one frame-specific fact, which is published: the second half kicks off late (FAQ.md)."""
     from mtah.config import data_dir
     from mtah.io_atd import default_cache, load_tracking, team_names
     from mtah.tagging import load_tags, set_pieces
+    from starter.load_homography import load as load_homography
 
     tracking = load_tracking(default_cache())
     home, away = team_names(default_cache())
     tags = set_pieces(load_tags(home, away, data_dir=str(data_dir())))
-    return predict(tracking, tags, extra_dead=[SECOND_HALF_D_BLOCK])
+    matrices = load_homography(data_dir=str(data_dir()))[0]
+    still = camera_still_intervals(matrices, tracking.players, ball_clean(tracking.ball)[1])
+    return predict(tracking, tags, extra_dead=[*still, SECOND_HALF_D_BLOCK])
 
 
 def write_csv(labels: LabelArray, out: Path) -> None:

@@ -26,6 +26,11 @@ missing ball while players stay under SLOW_MS for SLOW_FRAMES is D: there, 26% o
 slow and 2% of fast-ball frames does, as a false D costs a whole spell. The missing ball alone
 still never counts.
 
+`camera_still_intervals`: more stoppages with no ball to see. The tactical camera mostly stops moving
+at a stoppage, but also often in live play, so it counts only with players under CAMERA_PLAYERS_MS, both
+for CAMERA_SECONDS, with the ball missing. On the real match (aggregates only) that catches 30% of known
+D and 1.5% of fast-ball frames. Needs the homography, so only the real match has it.
+
 `join_close`: D stretches under JOIN_FRAMES apart are one stoppage seen in pieces, as a glimpse of
 the ball in the middle of one would otherwise count as a possession of its own.
 """
@@ -46,6 +51,9 @@ UNTAGGED_OFF_FRAMES = FPS
 UNTAGGED_STILL_S = 7
 SLOW_MS = 1.0
 JOIN_FRAMES = 3 * FPS
+CAMERA_STILL_MS = 0.05
+CAMERA_PLAYERS_MS = 1.5
+CAMERA_SECONDS = 8
 SLOW_FRAMES = 5 * FPS
 SLOW_LOST_FRAMES = 3 * FPS  # a shorter overlap with the missing ball is not worth splitting a spell
 SPEED_LAG = 12  # player speed over 2 * SPEED_LAG frames, about 1 s, so jitter is not running
@@ -112,6 +120,31 @@ def slow_lost_intervals(players: FloatArray, lost_mask: BoolArray) -> list[Inter
         if b - a >= SLOW_FRAMES:
             slow[a:b] = True
     return [(int(a), int(b) - 1) for a, b in zip(*_gaps(slow & lost)) if b - a >= SLOW_LOST_FRAMES]
+
+
+def camera_still_intervals(matrices: np.ndarray, players: FloatArray, lost_mask: BoolArray) -> list[Interval]:
+    lost = np.asarray(lost_mask, dtype=bool)
+    T = len(lost)
+    frames = np.arange(0, T, FPS)  # one a second: the camera moves slowly and this is 200,000 matrices
+    H_at = np.asarray(matrices, dtype=float)[frames]
+    ok = np.isfinite(H_at).all(axis=(1, 2))
+    if not ok.any():
+        return []
+    # Where one fixed pixel near the middle of the view looks on the pitch, in metres.
+    pixel = H_at[ok] @ np.array([0.5, 0.5, 1.0])
+    fixed = np.median(pixel[:, :2] / pixel[:, 2:], axis=0)
+    back = np.linalg.inv(H_at[ok]) @ np.array([fixed[0], fixed[1], 1.0])
+    camera = np.full((len(frames), 2), np.nan)
+    camera[ok] = back[:, :2] / back[:, 2:] * np.array(PITCH_M)
+
+    speed = np.full(len(frames), np.nan)
+    speed[:-1] = np.linalg.norm(np.diff(camera, axis=0), axis=1)  # metres per sample = m/s
+    still = (speed < CAMERA_STILL_MS) & (_player_speed(np.asarray(players, dtype=float))[frames] < CAMERA_PLAYERS_MS)
+    held = np.zeros(T, dtype=bool)
+    for a, b in zip(*_gaps(still)):
+        if b - a >= CAMERA_SECONDS:
+            held[frames[a] : frames[b - 1] + FPS] = True
+    return [(int(a), int(b) - 1) for a, b in zip(*_gaps(held & lost)) if b - a >= SLOW_LOST_FRAMES]
 
 
 def _player_speed(players: FloatArray) -> FloatArray:

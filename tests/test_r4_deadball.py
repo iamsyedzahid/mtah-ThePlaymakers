@@ -5,8 +5,10 @@ import pytest
 from mtah.ball import ball_clean
 from mtah.config import FPS
 from mtah.deadball import (
+    CAMERA_SECONDS,
     MAX_DEAD_S,
     UNTAGGED_STILL_S,
+    camera_still_intervals,
     dead_intervals,
     dead_mask,
     join_close,
@@ -124,6 +126,45 @@ def test_join_close_merges_a_glimpse_inside_a_stoppage():
     assert joined[100:300].all()  # 10 frames apart: one stoppage
     assert joined[300:500].sum() == 0  # 8 s apart: real play between them
     assert not joined[:100].any() and not joined[600:].any()  # never reaches the ends of the match
+
+
+def _camera(n=N, pan_ms=0.0, still=None):
+    """Homographies of a camera panning along x, still on the frames in `still`."""
+    moving = np.ones(n, dtype=bool) if still is None else np.logical_not(still)
+    x = np.cumsum(moving * pan_ms / FPS) / 105.3
+    matrices = np.tile(np.eye(3) * 1000.0, (n, 1, 1))
+    matrices[:, 2, 2] = 1.0
+    matrices[:, 0, 2] = -1000.0 * x
+    return matrices
+
+
+def test_still_camera_and_slowish_players_with_the_ball_missing_is_d():
+    lost = np.zeros(N, bool)
+    lost[200:800] = True
+    still = np.zeros(N, bool)
+    still[300:700] = True
+    spans = camera_still_intervals(_camera(pan_ms=5.0, still=still), _running(0.5), lost)
+    assert len(spans) == 1
+    start, end = spans[0]
+    assert abs(start - 300) <= FPS and abs(end - 700) <= 2 * FPS  # sampled once a second
+
+
+def test_a_moving_camera_or_running_players_is_not_d():
+    lost = np.ones(N, bool)
+    assert camera_still_intervals(_camera(pan_ms=5.0), _running(0.5), lost) == []
+    assert camera_still_intervals(_camera(), _running(3.0), lost) == []
+
+
+def test_a_still_camera_with_the_ball_seen_or_too_briefly_is_not_d():
+    assert camera_still_intervals(_camera(), _running(0.5), np.zeros(N, bool)) == []
+    still = np.zeros(N, bool)
+    still[300 : 300 + (CAMERA_SECONDS - 2) * FPS] = True
+    assert camera_still_intervals(_camera(pan_ms=5.0, still=still), _running(0.5), np.ones(N, bool)) == []
+
+
+def test_invalid_homographies_give_no_d():
+    matrices = np.full((N, 3, 3), np.nan)
+    assert camera_still_intervals(matrices, _running(0.5), np.ones(N, bool)) == []
 
 
 def test_outside_the_match_raises():
