@@ -38,6 +38,13 @@ DRIBBLE_RANGE_M = (0.3, 2.5)  # ball to the carrier's tracked position, so a pre
 SET_PIECE_PROB = 0.4  # chance that a turnover is preceded by a dead-ball spell
 TAG_BEFORE_S, TAG_AFTER_S = (2, 4), (1, 3)  # tag window around the restart, as about 5 s real tags
 TAG_NO_TEAM_PROB = 0.4  # real throw-in tags have no team
+# Stoppages between two carries of one team. Dead ball is a large share of a match (EVALUATION.md)
+# and the tags have false negatives (DATA.md), so many have no tag. The ball rests or is off the pitch.
+STOPPAGE_PROB = 0.15
+STOPPAGE_S = (6, 30)
+STOPPAGE_TAG_PROB = 0.45
+STOPPAGE_OFF_PROB = 0.5
+OFF_PITCH_M = 2.0
 # Ball gaps as measured on the real ATD (graded frames, aggregate only): 40.7% lost in 150 gaps,
 # median 268 frames. An exponential with mean 430 has median 298, close enough.
 BALL_LOST_FRAC = 0.407
@@ -78,8 +85,13 @@ def make_synthetic(n_frames: int = 5_000, seed: int = 0) -> Synthetic:
     # Stints: a pass travels (via a deflector, sometimes), then the carrier holds the ball 1-10 s.
     # Turnovers are forced at the quarter marks so even a short match has a few.
     starts, carriers, travel, leg1, deflector = [0], [int(rng.integers(S))], [0], [0], [-1]
+    pauses = [0]
     forced = [T // 4, T // 2, 3 * T // 4]
-    while (start := starts[-1] + travel[-1] + int(rng.integers(FPS, 10 * FPS))) < T:
+
+    def next_pause() -> int:
+        return int(rng.integers(STOPPAGE_S[0] * FPS, STOPPAGE_S[1] * FPS)) if rng.random() < STOPPAGE_PROB else 0
+
+    while (start := starts[-1] + travel[-1] + int(rng.integers(FPS, 10 * FPS)) + (pause := next_pause())) < T:
         prev = carriers[-1]
         flip = rng.random() < TURNOVER_PROB
         while forced and start >= forced[0]:
@@ -105,6 +117,7 @@ def make_synthetic(n_frames: int = 5_000, seed: int = 0) -> Synthetic:
         travel.append(first + second)
         leg1.append(first)
         deflector.append(defl)
+        pauses.append(pause)
     n = len(starts)
 
     # Pressing: in most holds the nearest opponent closes to 1.5-4 m of the carrier over 1 s.
@@ -160,20 +173,33 @@ def make_synthetic(n_frames: int = 5_000, seed: int = 0) -> Synthetic:
     # restart is taken.
     intervals: list[Interval] = []
     set_pieces: list[SetPiece] = []
-    for k in np.flatnonzero(team[carriers[1:]] != team[carriers[:-1]]) + 1:
-        if rng.random() < SET_PIECE_PROB:
-            restart = starts[k]
+
+    def tag(restart: int, carrier: int) -> None:
+        side = None if rng.random() < TAG_NO_TEAM_PROB else int(team[carrier])
+        set_pieces.append(SetPiece(
+            max(restart - int(rng.integers(TAG_BEFORE_S[0] * FPS, TAG_BEFORE_S[1] * FPS)), 0),
+            min(restart + int(rng.integers(TAG_AFTER_S[0] * FPS, TAG_AFTER_S[1] * FPS)), T - 1),
+            side, "Throw-in" if side is None else "Free Kick"))
+
+    for k in range(1, n):
+        restart = starts[k]
+        if pauses[k]:
+            lo = restart - pauses[k]
+            spot = ball[restart].copy()
+            if rng.random() < STOPPAGE_OFF_PROB:
+                spot[1] = -OFF_PITCH_M if spot[1] < pitch[1] / 2 else pitch[1] + OFF_PITCH_M
+        elif team[carriers[k]] != team[carriers[k - 1]] and rng.random() < SET_PIECE_PROB:
             lo = max(restart - int(rng.integers(2 * FPS, 8 * FPS)), starts[k - 1] + travel[k - 1] + FPS)
             if lo >= restart:
                 continue
-            intervals.append((lo, restart - 1))
-            labels[lo:restart] = D
-            ball[lo:restart] = ball[restart] + rng.normal(0.0, 0.05, size=(restart - lo, 2))
-            side = None if rng.random() < TAG_NO_TEAM_PROB else int(team[carriers[k - 1]])
-            set_pieces.append(SetPiece(
-                max(restart - int(rng.integers(TAG_BEFORE_S[0] * FPS, TAG_BEFORE_S[1] * FPS)), 0),
-                min(restart + int(rng.integers(TAG_AFTER_S[0] * FPS, TAG_AFTER_S[1] * FPS)), T - 1),
-                side, "Throw-in" if side is None else "Free Kick"))
+            spot = ball[restart].copy()
+        else:
+            continue
+        intervals.append((lo, restart - 1))
+        labels[lo:restart] = D
+        ball[lo:restart] = spot + rng.normal(0.0, 0.05, size=(restart - lo, 2))
+        if not pauses[k] or rng.random() < STOPPAGE_TAG_PROB:
+            tag(restart, carriers[k - 1])
 
     # Ball tracking: alternating seen and lost spells of exponential length; many gaps are moved
     # to start just before the next reception, where play is crowded.

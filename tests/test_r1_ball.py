@@ -15,7 +15,8 @@ def test_ball_clean_on_synthetic(syn):
     assert filled.shape == (T, 2) and filled.dtype == np.float64
     assert lost.shape == (T,) and lost.dtype == bool
     assert not np.isnan(filled).any()
-    assert lost.sum() <= raw_missing.sum() + 2 * ball.MAX_SPEED_PASSES  # short gaps are splined
+    # short gaps are splined; only a few samples go at glitches and where the ball is placed for a restart
+    assert lost.sum() <= raw_missing.sum() + 0.01 * T
 
 
 @pytest.mark.parametrize("seed", [0, 1, 2])

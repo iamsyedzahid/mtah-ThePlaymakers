@@ -4,7 +4,7 @@ import pytest
 
 from mtah.ball import ball_clean
 from mtah.config import FPS
-from mtah.deadball import MAX_DEAD_S, dead_intervals, dead_mask
+from mtah.deadball import MAX_DEAD_S, UNTAGGED_STILL_S, dead_intervals, dead_mask, restart_touches, untagged_intervals
 from mtah.interfaces import SetPiece
 from mtah.synthetic import make_synthetic
 
@@ -15,7 +15,7 @@ RESTART = 500
 def _rest_then_kick(rest_from=300):
     """The ball rolls, rests from rest_from until RESTART, then is kicked at 15 m/s."""
     ball = np.empty((N, 2))
-    ball[:rest_from] = np.column_stack([10.0 + 0.2 * np.arange(rest_from), np.full(rest_from, 30.0)])
+    ball[:rest_from] = np.column_stack([5.0 + 0.1 * np.arange(rest_from), np.full(rest_from, 30.0)])
     ball[rest_from:RESTART] = ball[rest_from - 1]
     after = N - RESTART
     ball[RESTART:] = ball[rest_from - 1] + np.column_stack([0.6 * np.arange(after) % 40, np.zeros(after)])
@@ -53,6 +53,37 @@ def test_a_lost_restart_falls_back_to_a_short_d():
     assert dead_intervals([tag], ball, np.zeros(N, bool)) == [(400, 460)]
 
 
+def test_ball_vanishing_during_the_stoppage_keeps_its_start():
+    ball = _rest_then_kick(rest_from=300)
+    lost = np.zeros(N, bool)
+    lost[420:600] = True  # gone from before the tag window until well after the restart
+    (start, end), = dead_intervals([SetPiece(460, 560, 0, "Free Kick")], ball, lost)
+    assert abs(start - 300) <= 3 and end == 510
+
+
+def test_untagged_rest_counts_only_beyond_a_goalkeeper_hold():
+    ball = _rest_then_kick(rest_from=RESTART - (UNTAGGED_STILL_S + 1) * FPS)
+    assert len(untagged_intervals(ball, np.zeros(N, bool))) == 1
+    held = _rest_then_kick(rest_from=RESTART - 4 * FPS)  # held 4 s, then played
+    assert untagged_intervals(held, np.zeros(N, bool)) == []
+
+
+def test_untagged_off_pitch_counts_and_a_missing_ball_alone_does_not():
+    ball = np.column_stack([10.0 + 0.09 * np.arange(N), np.full(N, 30.0)])  # stays on the pitch
+    assert untagged_intervals(ball, np.zeros(N, bool)) == []
+    lost = np.zeros(N, bool)
+    lost[200:700] = True
+    assert untagged_intervals(ball, lost) == []
+    ball[300:400, 1] = -3.0
+    assert len(untagged_intervals(ball, np.zeros(N, bool))) == 1
+
+
+def test_restart_gives_the_tagged_team_the_ball():
+    tags = [SetPiece(0, 50, 1, "Free Kick"), SetPiece(100, 150, None, "Throw-in")]
+    events = restart_touches(tags, [(10, 30), (110, 130)], N)
+    assert [(e.frame, e.team, e.kind) for e in events] == [(31, 1, "reception")]
+
+
 def test_outside_the_match_raises():
     with pytest.raises(ValueError):
         dead_intervals([SetPiece(10, N, 0, "Corner Kick")], np.zeros((N, 2)), np.zeros(N, bool))
@@ -61,7 +92,8 @@ def test_outside_the_match_raises():
 def test_d_found_on_synthetic_is_mostly_right():
     syn = make_synthetic(60_000, 1)
     filled, lost = ball_clean(syn.tracking.ball)
-    found = dead_mask(len(lost), dead_intervals(syn.set_pieces, filled, lost))
+    spans = dead_intervals(syn.set_pieces, filled, lost) + untagged_intervals(filled, lost)
+    found = dead_mask(len(lost), spans)
     truth = dead_mask(len(lost), syn.set_piece_intervals)
     hit = (found & truth).sum()
     assert hit / truth.sum() > 0.5 and hit / found.sum() > 0.7

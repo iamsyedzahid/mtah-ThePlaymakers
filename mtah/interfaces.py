@@ -154,6 +154,15 @@ def dead_intervals(set_pieces: Sequence[SetPiece], ball: FloatArray, lost_mask: 
     raise NotImplementedError("contract only; see mtah/deadball.py")
 
 
+def untagged_intervals(ball: FloatArray, lost_mask: BoolArray) -> list[Interval]:
+    """Inclusive D intervals for stoppages no tag marks, from ball_clean's output alone.
+
+    The tags have false negatives (DATA.md). Only a ball seen off the pitch, or resting for longer
+    than a goalkeeper may hold it, counts. A missing ball alone never does.
+    """
+    raise NotImplementedError("contract only; see mtah/deadball.py")
+
+
 def segment(
     e: FloatArray, lost_mask: BoolArray, dead_mask: BoolArray, touches: Sequence[Touch]
 ) -> LabelArray:

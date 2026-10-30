@@ -24,6 +24,7 @@ T = 3_000
         (touches, "touches"),
         (deadball, "dead_mask"),
         (deadball, "dead_intervals"),
+        (deadball, "untagged_intervals"),
         (segment, "segment"),
         (xpolicy, "to_x_policy"),
     ],
