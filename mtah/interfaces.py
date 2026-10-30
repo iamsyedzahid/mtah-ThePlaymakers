@@ -163,6 +163,14 @@ def untagged_intervals(ball: FloatArray, lost_mask: BoolArray) -> list[Interval]
     raise NotImplementedError("contract only; see mtah/deadball.py")
 
 
+def slow_lost_intervals(players: FloatArray, lost_mask: BoolArray) -> list[Interval]:
+    """Inclusive D intervals where the ball is missing and the players have slowed down.
+
+    The missing ball alone never counts: it needs sustained slow players around it.
+    """
+    raise NotImplementedError("contract only; see mtah/deadball.py")
+
+
 def segment(
     e: FloatArray, lost_mask: BoolArray, dead_mask: BoolArray, touches: Sequence[Touch]
 ) -> LabelArray:

@@ -4,7 +4,15 @@ import pytest
 
 from mtah.ball import ball_clean
 from mtah.config import FPS
-from mtah.deadball import MAX_DEAD_S, UNTAGGED_STILL_S, dead_intervals, dead_mask, restart_touches, untagged_intervals
+from mtah.deadball import (
+    MAX_DEAD_S,
+    UNTAGGED_STILL_S,
+    dead_intervals,
+    dead_mask,
+    restart_touches,
+    slow_lost_intervals,
+    untagged_intervals,
+)
 from mtah.interfaces import SetPiece
 from mtah.synthetic import make_synthetic
 
@@ -84,6 +92,30 @@ def test_restart_gives_the_tagged_team_the_ball():
     assert [(e.frame, e.team, e.kind) for e in events] == [(31, 1, "reception")]
 
 
+def _running(speed_ms, n=N, slots=4):
+    """Players all moving at speed_ms along x, with a sleeping ghost track that must not matter."""
+    players = np.zeros((n, slots, 2))
+    players[:, :, 0] = 10.0 + np.arange(n)[:, None] * np.asarray(speed_ms).reshape(-1, 1) / FPS
+    return players
+
+
+def test_missing_ball_with_slow_players_is_d():
+    lost = np.zeros(N, bool)
+    lost[200:600] = True
+    spans = slow_lost_intervals(_running(0.5), lost)
+    assert spans == [(200, 599)]
+
+
+def test_missing_ball_with_running_players_is_not_d():
+    lost = np.zeros(N, bool)
+    lost[200:600] = True
+    assert slow_lost_intervals(_running(3.0), lost) == []
+
+
+def test_slow_players_with_the_ball_seen_are_not_d():
+    assert slow_lost_intervals(_running(0.5), np.zeros(N, bool)) == []
+
+
 def test_outside_the_match_raises():
     with pytest.raises(ValueError):
         dead_intervals([SetPiece(10, N, 0, "Corner Kick")], np.zeros((N, 2)), np.zeros(N, bool))
@@ -93,6 +125,7 @@ def test_d_found_on_synthetic_is_mostly_right():
     syn = make_synthetic(60_000, 1)
     filled, lost = ball_clean(syn.tracking.ball)
     spans = dead_intervals(syn.set_pieces, filled, lost) + untagged_intervals(filled, lost)
+    spans += slow_lost_intervals(syn.tracking.players, lost)
     found = dead_mask(len(lost), spans)
     truth = dead_mask(len(lost), syn.set_piece_intervals)
     hit = (found & truth).sum()

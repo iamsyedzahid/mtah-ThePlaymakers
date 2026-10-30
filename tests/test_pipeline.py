@@ -25,6 +25,7 @@ T = 3_000
         (deadball, "dead_mask"),
         (deadball, "dead_intervals"),
         (deadball, "untagged_intervals"),
+        (deadball, "slow_lost_intervals"),
         (segment, "segment"),
         (xpolicy, "to_x_policy"),
     ],

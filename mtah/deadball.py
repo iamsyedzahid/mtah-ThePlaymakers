@@ -19,6 +19,11 @@ the pitch (throw-in, corner); the restart is the moment that "quiet" spell ends.
 
 `untagged_intervals`: stoppages no tag marks. A spell counts with UNTAGGED_OFF_FRAMES off the pitch,
 or UNTAGGED_STILL_S at rest: longer than the 6 s a goalkeeper may hold the ball, which is live.
+
+`slow_lost_intervals`: stoppages with no ball to see. On the real match (aggregates only) the median
+player moves at 1.9 m/s with a fast ball, 1.2 m/s in known D and 0.9 m/s with the ball missing. So a
+missing ball while players stay under SLOW_MS for SLOW_FRAMES is D: there, 46% of known D counts as
+slow and 6% of fast-ball frames does. The missing ball alone still never counts.
 """
 from typing import Sequence
 
@@ -35,6 +40,11 @@ OFF_MARGIN_M = 1.0  # the tracker is not exact at the line
 MAX_DEAD_S = 30
 UNTAGGED_OFF_FRAMES = FPS
 UNTAGGED_STILL_S = 7
+SLOW_MS = 1.25
+SLOW_FRAMES = 5 * FPS
+SLOW_LOST_FRAMES = 3 * FPS  # a shorter overlap with the missing ball is not worth splitting a spell
+SPEED_LAG = 12  # player speed over 2 * SPEED_LAG frames, about 1 s, so jitter is not running
+CHUNK_FRAMES = 20_000  # bounds the memory of the per-frame median
 
 
 def dead_mask(T: int, set_piece_intervals: Sequence[Interval]) -> BoolArray:
@@ -79,6 +89,31 @@ def untagged_intervals(ball: FloatArray, lost_mask: BoolArray) -> list[Interval]
         for a, b in _spells(still | off, lost)
         if off[a:b].sum() >= UNTAGGED_OFF_FRAMES or still[a:b].sum() >= UNTAGGED_STILL_S * FPS
     ]
+
+
+def slow_lost_intervals(players: FloatArray, lost_mask: BoolArray) -> list[Interval]:
+    lost = np.asarray(lost_mask, dtype=bool)
+    slow = np.zeros(len(lost), dtype=bool)
+    for a, b in zip(*_gaps(_player_speed(np.asarray(players, dtype=float)) < SLOW_MS)):
+        if b - a >= SLOW_FRAMES:
+            slow[a:b] = True
+    return [(int(a), int(b) - 1) for a, b in zip(*_gaps(slow & lost)) if b - a >= SLOW_LOST_FRAMES]
+
+
+def _player_speed(players: FloatArray) -> FloatArray:
+    """Per frame, the median speed of tracked players in m/s; NaN where nobody is tracked."""
+    T = len(players)
+    span = 2 * SPEED_LAG
+    out = np.full(T, np.nan)
+    for lo in range(0, max(T - span, 0), CHUNK_FRAMES):
+        hi = min(lo + CHUNK_FRAMES, T - span)
+        step = np.linalg.norm(players[lo + span : hi + span] - players[lo:hi], axis=2) * FPS / span
+        seen = np.isfinite(step)
+        count = seen.sum(axis=1)
+        rows = np.flatnonzero(count)
+        ordered = np.sort(np.where(seen, step, np.inf), axis=1)
+        out[lo + SPEED_LAG + rows] = ordered[rows, (count[rows] - 1) // 2]
+    return out
 
 
 def restart_touches(set_pieces: Sequence[SetPiece], intervals: Sequence[Interval], T: int) -> list[Touch]:

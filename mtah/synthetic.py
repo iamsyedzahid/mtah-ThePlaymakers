@@ -45,6 +45,12 @@ STOPPAGE_S = (6, 30)
 STOPPAGE_TAG_PROB = 0.45
 STOPPAGE_OFF_PROB = 0.5
 OFF_PITCH_M = 2.0
+# The whole team moves with play, which leaves ball-to-player distances alone. Shaped by real
+# aggregates only: median player speed 1.9 m/s with a fast ball and 1.2 m/s or less at a stoppage.
+SHIFT_RADIUS_M = 5.0
+SHIFT_PERIOD_S = 15.0
+SLOW_PLAY_PROB = 0.2  # share of stints played slowly, which a slow-players rule must not call dead
+SLOW_PLAY_PACE = 0.3
 # Ball gaps as measured on the real ATD (graded frames, aggregate only): 40.7% lost in 150 gaps,
 # median 268 frames. An exponential with mean 430 has median 298, close enough.
 BALL_LOST_FRAC = 0.407
@@ -174,6 +180,8 @@ def make_synthetic(n_frames: int = 5_000, seed: int = 0) -> Synthetic:
     intervals: list[Interval] = []
     set_pieces: list[SetPiece] = []
 
+    stops: list[tuple[int, int, bool]] = []  # (k, first dead frame, ball off the pitch)
+
     def tag(restart: int, carrier: int) -> None:
         side = None if rng.random() < TAG_NO_TEAM_PROB else int(team[carrier])
         set_pieces.append(SetPiece(
@@ -184,17 +192,29 @@ def make_synthetic(n_frames: int = 5_000, seed: int = 0) -> Synthetic:
     for k in range(1, n):
         restart = starts[k]
         if pauses[k]:
-            lo = restart - pauses[k]
-            spot = ball[restart].copy()
-            if rng.random() < STOPPAGE_OFF_PROB:
-                spot[1] = -OFF_PITCH_M if spot[1] < pitch[1] / 2 else pitch[1] + OFF_PITCH_M
+            stops.append((k, restart - pauses[k], rng.random() < STOPPAGE_OFF_PROB))
         elif team[carriers[k]] != team[carriers[k - 1]] and rng.random() < SET_PIECE_PROB:
             lo = max(restart - int(rng.integers(2 * FPS, 8 * FPS)), starts[k - 1] + travel[k - 1] + FPS)
-            if lo >= restart:
-                continue
-            spot = ball[restart].copy()
-        else:
-            continue
+            if lo < restart:
+                stops.append((k, lo, False))
+
+    # Team movement: a slow circle that pauses at a stoppage and crawls through slow-play stints.
+    pace = np.ones(T)
+    for k in range(n):
+        if rng.random() < SLOW_PLAY_PROB:
+            pace[starts[k] : starts[k + 1] if k + 1 < n else T] = SLOW_PLAY_PACE
+    for k, lo, _ in stops:
+        pace[lo : starts[k]] = 0.0
+    phase = np.cumsum(pace) * 2 * np.pi / (SHIFT_PERIOD_S * FPS)
+    shift = SHIFT_RADIUS_M * np.column_stack([np.cos(phase), np.sin(phase)])
+    ball += shift
+    players[:] = np.clip(players + shift[:, None, :], 0.0, pitch)
+
+    for k, lo, off_pitch in stops:
+        restart = starts[k]
+        spot = ball[restart].copy()
+        if off_pitch:
+            spot[1] = -OFF_PITCH_M if spot[1] < pitch[1] / 2 else pitch[1] + OFF_PITCH_M
         intervals.append((lo, restart - 1))
         labels[lo:restart] = D
         ball[lo:restart] = spot + rng.normal(0.0, 0.05, size=(restart - lo, 2))
