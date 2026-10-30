@@ -22,8 +22,12 @@ or UNTAGGED_STILL_S at rest: longer than the 6 s a goalkeeper may hold the ball,
 
 `slow_lost_intervals`: stoppages with no ball to see. On the real match (aggregates only) the median
 player moves at 1.9 m/s with a fast ball, 1.2 m/s in known D and 0.9 m/s with the ball missing. So a
-missing ball while players stay under SLOW_MS for SLOW_FRAMES is D: there, 46% of known D counts as
-slow and 6% of fast-ball frames does. The missing ball alone still never counts.
+missing ball while players stay under SLOW_MS for SLOW_FRAMES is D: there, 26% of known D counts as
+slow and 2% of fast-ball frames does, as a false D costs a whole spell. The missing ball alone
+still never counts.
+
+`join_close`: D stretches under JOIN_FRAMES apart are one stoppage seen in pieces, as a glimpse of
+the ball in the middle of one would otherwise count as a possession of its own.
 """
 from typing import Sequence
 
@@ -40,7 +44,8 @@ OFF_MARGIN_M = 1.0  # the tracker is not exact at the line
 MAX_DEAD_S = 30
 UNTAGGED_OFF_FRAMES = FPS
 UNTAGGED_STILL_S = 7
-SLOW_MS = 1.25
+SLOW_MS = 1.0
+JOIN_FRAMES = 3 * FPS
 SLOW_FRAMES = 5 * FPS
 SLOW_LOST_FRAMES = 3 * FPS  # a shorter overlap with the missing ball is not worth splitting a spell
 SPEED_LAG = 12  # player speed over 2 * SPEED_LAG frames, about 1 s, so jitter is not running
@@ -54,6 +59,15 @@ def dead_mask(T: int, set_piece_intervals: Sequence[Interval]) -> BoolArray:
             raise ValueError(f"interval ({start}, {end}) is not inside [0, {T})")
         mask[start : end + 1] = True
     return mask
+
+
+def join_close(mask: BoolArray) -> BoolArray:
+    out = np.asarray(mask, dtype=bool).copy()
+    live_starts, live_ends = _gaps(np.logical_not(out))
+    for a, b in zip(live_starts, live_ends):
+        if a > 0 and b < len(out) and b - a < JOIN_FRAMES:
+            out[a:b] = True
+    return out
 
 
 def dead_intervals(set_pieces: Sequence[SetPiece], ball: FloatArray, lost_mask: BoolArray) -> list[Interval]:

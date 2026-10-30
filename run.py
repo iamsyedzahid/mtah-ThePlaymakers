@@ -13,7 +13,14 @@ import numpy as np
 
 from mtah.ball import ball_clean, gap_stats
 from mtah.config import N_FRAMES, SECOND_HALF_D_BLOCK
-from mtah.deadball import dead_intervals, dead_mask, restart_touches, slow_lost_intervals, untagged_intervals
+from mtah.deadball import (
+    dead_intervals,
+    dead_mask,
+    join_close,
+    restart_touches,
+    slow_lost_intervals,
+    untagged_intervals,
+)
 from mtah.evidence import evidence
 from mtah.interfaces import X, LabelArray, SetPiece, Tracking
 from mtah.segment import segment
@@ -34,7 +41,7 @@ def predict(tracking: Tracking, set_pieces: Sequence[SetPiece]) -> LabelArray:
     if tracking.n_frames == N_FRAMES:  # the real match: the second half kicks off late (FAQ.md)
         intervals.append(SECOND_HALF_D_BLOCK)
     events = [*events, *restart_touches(set_pieces, tagged, tracking.n_frames)]
-    return segment(e, lost, dead_mask(tracking.n_frames, intervals), events)
+    return segment(e, lost, join_close(dead_mask(tracking.n_frames, intervals)), events)
 
 
 def write_csv(labels: LabelArray, out: Path) -> None:

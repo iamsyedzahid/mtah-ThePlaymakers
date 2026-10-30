@@ -9,6 +9,7 @@ from mtah.deadball import (
     UNTAGGED_STILL_S,
     dead_intervals,
     dead_mask,
+    join_close,
     restart_touches,
     slow_lost_intervals,
     untagged_intervals,
@@ -114,6 +115,15 @@ def test_missing_ball_with_running_players_is_not_d():
 
 def test_slow_players_with_the_ball_seen_are_not_d():
     assert slow_lost_intervals(_running(0.5), np.zeros(N, bool)) == []
+
+
+def test_join_close_merges_a_glimpse_inside_a_stoppage():
+    mask = np.zeros(N, bool)
+    mask[100:200] = mask[210:300] = mask[500:600] = True
+    joined = join_close(mask)
+    assert joined[100:300].all()  # 10 frames apart: one stoppage
+    assert joined[300:500].sum() == 0  # 8 s apart: real play between them
+    assert not joined[:100].any() and not joined[600:].any()  # never reaches the ends of the match
 
 
 def test_outside_the_match_raises():
