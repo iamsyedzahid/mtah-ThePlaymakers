@@ -1,5 +1,7 @@
 # Possession from automatic tracking: technical document
 
+Team: The Playmakers
+
 Task: label each of the 199,319 frames of the tactical video H, A or D, ranked on spellF1.
 
 ## Approach
@@ -152,8 +154,8 @@ python -m venv .venv
 pip install -r requirements.txt
 
 $env:MTAH_DATA_DIR = "path\to\bundle"   # Linux or macOS: export MTAH_DATA_DIR=path/to/bundle; skip if in ./data
-python run.py --real --out <team_name>.csv
-python evaluation/validate_submission.py <team_name>.csv
+python run.py --real --out "The Playmakers.csv"
+python evaluation/validate_submission.py "The Playmakers.csv"
 ```
 
 The first run reads the ATD and caches it in `outputs/cache/`, which takes a few minutes. The pipeline
