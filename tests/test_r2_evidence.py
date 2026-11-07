@@ -137,3 +137,130 @@ def test_velocity_matches_finite_difference():
     vel = ev._velocity(pos)
     np.testing.assert_allclose(vel[[0, 10, 20, n - 1], 0, 0], 3.0)
     assert np.isfinite(vel).all()
+
+
+# -- evidence_shape ---------------------------------------------------------------------------
+
+def shape_scene(n_spells=20, spell=150, seed=0, ball_offset=(0.5, 0.0)):
+    """Possession alternates every `spell` frames. The team with the ball spreads wide (y over
+    5..63 m) and the other compacts (24..44 m); home plays on the left, so it attacks +x. The ball
+    sits next to a player of the owning team and goes missing for 60 frames in the middle of each
+    spell, so every lost stretch is surrounded by clear contacts. Returns (tracking, owner, lost),
+    owner 0 for home and 1 for away."""
+    rng = np.random.default_rng(seed)
+    k, T = 10, n_spells * spell
+    owner = np.repeat(np.arange(n_spells) % 2, spell)
+    home_has = (owner == 0)[:, None]
+    wide, tight = np.linspace(5.0, 63.0, k), np.linspace(24.0, 44.0, k)
+    players = np.empty((T, 2 * k, 2))
+    players[..., 0] = np.r_[np.linspace(10.0, 45.0, k), np.linspace(60.0, 95.0, k)]
+    players[:, :k, 1] = np.where(home_has, wide, tight)
+    players[:, k:, 1] = np.where(home_has, tight, wide)
+    players += rng.normal(0.0, 0.3, size=players.shape)
+    carrier = np.where(owner == 0, 3, k + 3)
+    ball = players[np.arange(T), carrier] + np.array(ball_offset)
+    lost = np.zeros(T, dtype=bool)
+    for s in range(n_spells):
+        lost[s * spell + 50 : s * spell + 110] = True
+    ball[lost] = np.nan
+    return Tracking(ball, players, np.repeat([0, 1], k)), owner, lost
+
+
+def test_shape_reads_possession_from_team_shape():
+    tr, owner, lost = shape_scene()
+    e = ev.evidence_shape(tr)
+    truth = np.where(owner == 0, 1.0, -1.0)
+    assert (np.sign(e[lost]) == truth[lost]).mean() > 0.95
+    model = ev.shape_logits(*_scan_and_lost(tr), ev.halves_for(tr.n_frames))[1][0]
+    assert model.direction == 1 and model.weights is not None
+    assert model.weights[ev.SHAPE_FEATURES.index("width")] > 0  # the wider team has the ball
+
+
+def _scan_and_lost(tr):
+    filled, lost = ball_clean(tr.ball)
+    return ev.scan_teams(filled, tr.players, tr.team), lost
+
+
+@pytest.mark.parametrize("scene", ["hand_built", "synthetic"])
+def test_shape_only_on_lost_frames_bounded_finite(big, scene):
+    tr = shape_scene()[0] if scene == "hand_built" else big.tracking
+    _, lost = ball_clean(tr.ball)
+    e = ev.evidence_shape(tr)
+    assert e.shape == (tr.n_frames,) and e.dtype == np.float64
+    assert np.isfinite(e).all() and (np.abs(e) <= 1.0).all()
+    assert (e[~lost] == 0.0).all()  # the complement of evidence(): never on a trusted frame
+    assert (e[lost] != 0).mean() > 0.9
+
+
+@pytest.mark.parametrize("scene", ["hand_built", "synthetic"])
+def test_shape_flipping_teams_flips_the_sign(big, scene):
+    tr = shape_scene()[0] if scene == "hand_built" else big.tracking
+    flipped = Tracking(tr.ball, tr.players, (1 - tr.team).astype(tr.team.dtype), tr.fps)
+    e = ev.evidence_shape(tr)
+    assert (e != 0).any()
+    np.testing.assert_array_equal(ev.evidence_shape(flipped), -e)
+
+
+def test_shape_deterministic_and_order_free(big):
+    a, b = make_synthetic(20_000, seed=1), big
+    e = ev.evidence_shape(a.tracking)
+    assert (e != 0).any()
+    np.testing.assert_array_equal(e, ev.evidence_shape(b.tracking))
+    tr = big.tracking
+    order = np.random.default_rng(1).permutation(tr.team.size)
+    shuffled = Tracking(tr.ball, tr.players[:, order], tr.team[order])
+    # sums over slots change order, so equal up to rounding, never in sign or size
+    np.testing.assert_allclose(ev.evidence_shape(shuffled), ev.evidence_shape(tr), atol=1e-9)
+
+
+def test_shape_blocks_do_not_change_the_result(big, monkeypatch):
+    whole = ev.evidence_shape(big.tracking)
+    assert (whole != 0).any()
+    monkeypatch.setattr(ev, "BLOCK_FRAMES", 997)
+    np.testing.assert_array_equal(ev.evidence_shape(big.tracking), whole)
+
+
+def test_shape_silent_without_clear_contacts():
+    tr = shape_scene(ball_offset=(0.0, 80.0))[0]  # the ball is never near anyone
+    scan, lost = _scan_and_lost(tr)
+    logit, (model,) = ev.shape_logits(scan, lost, ev.halves_for(tr.n_frames))
+    assert (logit == 0).all()
+    assert model.weights is None and model.n_home == model.n_away == 0
+    assert (ev.evidence_shape(tr) == 0).all()
+
+
+def test_shape_per_half_and_nothing_outside(big):
+    scan, lost = _scan_and_lost(big.tracking)
+    halves = ((100, 9_899), (10_100, 19_899))
+    logit, models = ev.shape_logits(scan, lost, halves)
+    assert [(m.first, m.last) for m in models] == list(halves)
+    e = ev.logit_to_evidence(logit)
+    outside = np.ones(big.tracking.n_frames, dtype=bool)
+    for first, last in halves:
+        outside[first : last + 1] = False
+    assert all(m.weights is not None for m in models)
+    assert (e[outside] == 0).all() and (e[~outside] != 0).any()
+
+
+def test_halves_are_the_published_ones_on_our_match():
+    from mtah.config import GRADED_HALVES, N_FRAMES
+
+    assert ev.halves_for(N_FRAMES) == GRADED_HALVES
+    assert ev.halves_for(3_000) == ((0, 2_999),)
+
+
+def test_fit_logistic_recovers_known_weights():
+    rng = np.random.default_rng(0)
+    x = rng.normal(size=(20_000, 3))
+    w_true = np.array([1.5, -0.5, 0.0])
+    y = np.where(rng.random(20_000) < 1 / (1 + np.exp(-x @ w_true)), 1.0, -1.0)
+    w = ev.fit_logistic(y[:, None] * x, ridge=1.0)
+    np.testing.assert_allclose(w, w_true, atol=0.06)
+    np.testing.assert_array_equal(ev.fit_logistic(-y[:, None] * -x, ridge=1.0), w)  # team swap
+
+
+def test_smooth_nan_ignores_and_keeps_missing():
+    x = np.array([[1.0], [2.0], [3.0], [np.nan], [5.0]])
+    out = ev._smooth_nan(x, 3)[:, 0]
+    np.testing.assert_allclose(out[[0, 1, 2, 4]], [1.5, 2.0, 2.5, 5.0])
+    assert np.isnan(out[3])
