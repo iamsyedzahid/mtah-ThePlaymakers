@@ -612,3 +612,176 @@ def test_fusion_features_refuse_centre_origin_and_bad_pitch(syn):
         rf.fusion_features(tr.ball, tr.players, tr.team, (0.0, 68.0), [(0, tr.n_frames)])
     with pytest.raises(ValueError):  # shapes are checked as for a Tracking
         rf.fusion_features(tr.ball[:-1], tr.players, tr.team, PITCH_M, [(0, 100)])
+
+
+# -- choosing the shape features ----------------------------------------------------------------
+
+def test_shape_feature_subsets_are_the_same_columns(big):
+    scan, _ = _scan_and_lost(big.tracking)
+    full = ev.shape_features(scan, 0, 9_999, 1, features=ev.SHAPE_COLUMNS)
+    subset = ("speed", "width")
+    np.testing.assert_array_equal(ev.shape_features(scan, 0, 9_999, 1, features=subset),
+                                  full[:, [ev.SHAPE_COLUMNS.index(f) for f in subset]])
+
+
+@pytest.mark.parametrize("features", [(), ("width", "width"), ("width", "height")], ids=["none", "twice", "unknown"])
+def test_shape_features_refuse_bad_names(big, features):
+    scan, _ = _scan_and_lost(big.tracking)
+    with pytest.raises(ValueError, match="shape features"):
+        ev.shape_features(scan, 0, 99, 1, features=features)
+
+
+def test_shape_subset_model_flips_with_the_teams(big):
+    tr = big.tracking
+    flipped = Tracking(tr.ball, tr.players, (1 - tr.team).astype(tr.team.dtype), tr.fps)
+    core = ("width", "forward", "speed")
+    logit, (model,) = ev.shape_logits(*_scan_and_lost(tr), ev.halves_for(tr.n_frames), features=core)
+    assert model.features == core and model.weights.shape == (3,) and (logit != 0).any()
+    np.testing.assert_array_equal(ev.shape_logits(*_scan_and_lost(flipped), ev.halves_for(tr.n_frames), features=core)[0],
+                                  -logit)
+
+
+# -- the DFL reader (mtah/dfl_games.py), on a hand-written file in its format --------------------
+
+DFL_INFO = """<?xml version="1.0" encoding="UTF-8"?>
+<PutDataRequest><MatchInformation>
+  <Environment PitchX="100.00" PitchY="60.00" />
+  <Teams>
+    <Team TeamId="T-AWAY" Role="guest"><Players><Player PersonId="P-A1" /><Player PersonId="P-A2" /></Players></Team>
+    <Team TeamId="T-HOME" Role="home"><Players>
+      <Player PersonId="P-H2" /><Player PersonId="P-H1" /><Player PersonId="P-H9" /></Players></Team>
+  </Teams>
+</MatchInformation></PutDataRequest>
+"""
+
+
+def _frames(n_xy, extra=""):
+    return "\n".join(f'<Frame N="{n}" X="{x}" Y="{y}" {extra}/>' for n, x, y in n_xy)
+
+
+def _ball(rows):
+    return "\n".join(f'<Frame N="{n}" X="{x}" Y="{y}" Z="0.00" BallPossession="{p}" BallStatus="{s}"/>'
+                     for n, x, y, p, s in rows)
+
+
+DFL_POSITIONS = f"""<?xml version="1.0" encoding="UTF-8"?>
+<PutDataRequest><Positions>
+<FrameSet GameSection="firstHalf" TeamId="referee" PersonId="REF1">{_frames([(10000, 9, 9), (10001, 9, 9)])}</FrameSet>
+<FrameSet GameSection="firstHalf" TeamId="BALL" PersonId="B">{_ball([(10000, 0.0, 0.0, 1, 1), (10001, 0.5, 0.0, 2, 1),
+                                                                      (10003, 1.0, -2.0, 2, 0)])}</FrameSet>
+<FrameSet GameSection="firstHalf" TeamId="T-HOME" PersonId="P-H1">{_frames([(9999, 7, 7), (10000, -1.0, 0.0),
+                                                                             (10003, -2.0, 1.0)])}</FrameSet>
+<FrameSet GameSection="firstHalf" TeamId="T-AWAY" PersonId="P-A1">{_frames([(10000, 3.0, 4.0), (10001, 3.0, 4.0),
+                                                                             (10002, 3.0, 4.0), (10003, 3.0, 4.0)])}</FrameSet>
+<FrameSet GameSection="secondHalf" TeamId="BALL" PersonId="B">{_ball([(100000, 10.0, 0.0, 2, 1), (100001, 10.0, 0.0, 1, 1)])}</FrameSet>
+<FrameSet GameSection="secondHalf" TeamId="T-HOME" PersonId="P-H2">{_frames([(100000, 10.5, 0.0), (100001, 10.5, 0.0)])}</FrameSet>
+</Positions></PutDataRequest>
+"""
+
+
+def test_dfl_positions_read_as_kloppy_labels_them(tmp_path):
+    from mtah import dfl_games as dg
+    (tmp_path / "info.xml").write_text(DFL_INFO, encoding="utf-8")
+    (tmp_path / "pos.xml").write_text(DFL_POSITIONS, encoding="utf-8")
+    players, pitch = dg.read_match_information(tmp_path / "info.xml")
+    assert pitch == (100.0, 60.0) and players == {"P-A1": 1, "P-A2": 1, "P-H1": 0, "P-H2": 0, "P-H9": 0}
+    tr, halves, labels = dg.read_positions(tmp_path / "pos.xml", players, pitch)
+    assert halves == ((0, 3), (4, 5))  # each period from its first to its last ball frame, back to back
+    # D where BallStatus is not 1, else H where BallPossession is 1, else A; no ball record: X
+    assert labels.tolist() == ["H", "A", "X", "D", "A", "H"]
+    np.testing.assert_array_equal(tr.team, [0, 0, 1])  # home first, then away; squads without data are no slot
+    np.testing.assert_allclose(tr.ball[[0, 3]], [[50.0, 30.0], [51.0, 28.0]])  # centre origin to corner origin
+    assert np.isnan(tr.ball[2]).all()
+    np.testing.assert_allclose(tr.players[0, :, :], [[49.0, 30.0], [np.nan, np.nan], [53.0, 34.0]])
+    assert np.isnan(tr.players[1, 0]).all()  # P-H1 has no frame 10001; his frame 9999 is before the ball's
+    assert np.isnan(tr.players[:4, 1]).all() and np.isnan(tr.players[4:, 2]).all()  # on the pitch in one half only
+    assert not (tr.players == 9 + 50).any()  # the referee is no slot
+
+
+def test_dfl_contacts_are_new_players_on_a_live_ball():
+    from mtah import dfl_games as dg
+    n = 12
+    ball = np.tile([50.0, 30.0], (n, 1))
+    far, near = [60.0, 30.0], [50.5, 30.0]
+    p0 = np.array([near] * 3 + [far] * 9)  # p0 touches 0-2
+    p1 = np.array([far] * 5 + [near] * 7)  # p1 touches from 5 on
+    tr = Tracking(ball, np.stack([p0, p1], axis=1), np.array([0, 1]))
+    labels = np.array(list("DHHAAAAAAXAA"))
+    np.testing.assert_array_equal(dg.contact_frames(tr, labels), [1, 5])  # frame 0 is dead; 9 is X
+
+
+def _fake_match(tmp_path, monkeypatch):
+    from mtah import dfl_games as dg
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    m = dg.Match("TEST01", "000009", "", 0, "", 0)
+    (raw / dg.info_name(m)).write_text(DFL_INFO, encoding="utf-8")
+    (raw / dg.positions_name(m)).write_text(DFL_POSITIONS, encoding="utf-8")
+    sizes = [(raw / name).stat().st_size for name in (dg.info_name(m), dg.positions_name(m))]
+    m = m._replace(info_sha1=dg._digest(raw / dg.info_name(m), "sha1", sizes[0]), info_size=sizes[0],
+                   positions_sha256=dg._digest(raw / dg.positions_name(m), "sha256", sizes[1]), positions_size=sizes[1])
+    monkeypatch.setattr(dg, "MATCHES", (m,))
+    return dg, raw, m
+
+
+def test_dfl_info_hash_is_the_git_blob_id():
+    import hashlib
+    from mtah import dfl_games as dg
+    body = b"hello\n"  # `git hash-object` gives ce013625030b... for this content
+    assert hashlib.sha1(b"blob %d\0" % len(body) + body).hexdigest() == "ce013625030ba8dba906f756967f9e9ca394464a"
+    assert dg.MATCHES[0].info_sha1 == "8f2a82d84428c28e0e01f0a908c8395cc8d23900"  # as the mirror's revision lists it
+
+
+def test_dfl_load_checks_hashes_and_caches_plain_arrays(tmp_path, monkeypatch):
+    dg, raw, m = _fake_match(tmp_path, monkeypatch)
+    cache = tmp_path / "cache"
+    game = dg.load_match("TEST01", root=raw, cache_dir=cache)
+    assert game.number == "TEST01" and game.pitch == (100.0, 60.0) and game.labels.tolist() == list("HAXDAH")
+    again = dg.load_match("TEST01", root=raw, cache_dir=cache)  # from the cache now
+    for field in ("ball", "players", "team"):
+        np.testing.assert_array_equal(getattr(game.tracking, field), getattr(again.tracking, field))
+    for field in ("halves", "labels", "contacts", "pitch"):
+        np.testing.assert_array_equal(getattr(game, field), getattr(again, field))
+    with np.load(cache / "dfl_TEST01.npz", allow_pickle=False) as saved:
+        assert all(saved[k].dtype != object for k in saved.files)
+    (raw / dg.positions_name(m)).write_text(DFL_POSITIONS.replace('X="0.5"', 'X="0.6"'), encoding="utf-8")
+    with pytest.raises(ValueError, match="not the file"):
+        dg.load_match("TEST01", root=raw, cache_dir=None)
+    (raw / dg.info_name(m)).unlink()
+    with pytest.raises(FileNotFoundError):
+        dg.load_match("TEST01", root=raw, cache_dir=None)
+    with pytest.raises(ValueError, match="DFL matches"):
+        dg.load_match("NOPE", root=raw)
+
+
+def test_dfl_reader_never_expands_external_entities(tmp_path):
+    """The XML parser is the standard library's (expat): it refuses entities that point at files
+    or URLs, and expat 2.4.1+ caps entity amplification. load_match only parses files whose hash
+    matches the pinned revision, but the reader itself must not reach outside the file."""
+    import pyexpat
+    import xml.etree.ElementTree as ET
+    from mtah import dfl_games as dg
+    assert tuple(int(v) for v in pyexpat.EXPAT_VERSION.split("_")[1].split(".")) >= (2, 4, 1)
+    secret = tmp_path / "secret.txt"
+    secret.write_text("42", encoding="utf-8")
+    hostile = DFL_POSITIONS.replace('<?xml version="1.0" encoding="UTF-8"?>',
+                                    f'<?xml version="1.0"?><!DOCTYPE p [<!ENTITY s SYSTEM "{secret.as_uri()}">]>')
+    hostile = hostile.replace('X="0.5"', 'X="&s;"')
+    (tmp_path / "pos.xml").write_text(hostile, encoding="utf-8")
+    with pytest.raises(ET.ParseError):
+        dg.read_positions(tmp_path / "pos.xml", {"P-H1": 0, "P-H2": 0, "P-A1": 1}, (100.0, 60.0))
+
+
+def test_dfl_reader_refuses_an_absurd_period(tmp_path):
+    from mtah import dfl_games as dg
+    broken = DFL_POSITIONS.replace('N="10003" X="1.0"', 'N="900000000" X="1.0"')
+    (tmp_path / "pos.xml").write_text(broken, encoding="utf-8")
+    with pytest.raises(ValueError, match="spans"):
+        dg.read_positions(tmp_path / "pos.xml", {"P-H1": 0, "P-H2": 0, "P-A1": 1}, (100.0, 60.0))
+
+
+def test_benchmark_lists_the_dfl_matches_with_their_own_seeds():
+    numbers, load, seeds = fit.load_games("dfl")
+    assert len(numbers) == 7 and len({seeds[n] for n in numbers}) == 7
+    assert not set(seeds.values()) & set(fit.MASK_SEED.values())  # never Metrica's masks
+    assert fit.load_games("metrica")[0] == list(mg.GAMES)

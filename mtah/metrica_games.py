@@ -68,11 +68,12 @@ class Event(NamedTuple):
 
 
 class OpenGame(NamedTuple):
-    number: int
+    number: int | str  # Metrica's game number, or a DFL match id (mtah/dfl_games.py)
     tracking: Tracking  # the ball as Metrica gives it, before any masking
     halves: tuple[Interval, ...]  # the periods, 0-indexed inclusive
     labels: LabelArray  # H/A/D/X from the events
     contacts: IntArray  # frames where a player takes the ball: pass receptions and recoveries
+    pitch: tuple[float, float] = METRICA_PITCH_M  # length, width (m)
 
 
 def load_game(number: int, root: Path = METRICA_DIR, cache_dir: Path | None = CACHE_DIR) -> OpenGame:

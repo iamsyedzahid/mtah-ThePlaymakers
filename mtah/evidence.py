@@ -66,7 +66,8 @@ SHAPE_SMOOTH_FRAMES = 2 * FPS  # features are averaged over a centred 2 s window
 SHAPE_RIDGE = 1.0  # L2 penalty on the standardised weights
 SHAPE_MIN_LABELS = 100  # clear contacts needed per team in a half, else that half says nothing
 SHAPE_LINE = (1, 5)  # sorted from the own goal: skip the deepest (the keeper), average the next 4
-SHAPE_FEATURES = ("block", "width", "length", "line", "forward", "speed")
+SHAPE_COLUMNS = ("block", "width", "length", "line", "forward", "speed")  # every feature shape_features knows
+SHAPE_FEATURES = SHAPE_COLUMNS  # the ones the shipped model uses
 FIT_DECIMALS = 6  # fitted weights are rounded, so last-bit BLAS differences cannot reach labels
 
 # Calibration, fitted on Metrica's open games only (python -m mtah.evidence_fit prints these).
@@ -106,6 +107,7 @@ class ShapeModel(NamedTuple):
     n_away: int
     scale: FloatArray | None  # [F] RMS of each feature over the clear contacts
     weights: FloatArray | None  # [F] on the standardised features
+    features: tuple[str, ...] = SHAPE_FEATURES  # what the F columns are
 
 
 # -- evidence functions -------------------------------------------------------------------------
@@ -294,27 +296,32 @@ def halves_for(n_frames: int) -> tuple[Interval, ...]:
     return ((0, n_frames - 1),)
 
 
-def shape_features(scan: Scan, first: int, last: int, direction: int, length: float = PITCH_M[0]) -> FloatArray:
-    """[n, F] smoothed home-minus-away shape features for frames first..last (inclusive).
+def shape_features(scan: Scan, first: int, last: int, direction: int, length: float = PITCH_M[0],
+                   features: Sequence[str] = SHAPE_FEATURES) -> FloatArray:
+    """[n, F] smoothed home-minus-away shape features for frames first..last (inclusive), the
+    columns named in `features`, in that order.
 
     Each is positive when home looks like the team with the ball: the block is in home's
-    attacking half, home is wider and longer, home's defensive line is higher up (and away's
-    deeper), everyone runs towards away's goal, home runs more. Swapping the teams negates every
-    feature exactly, because the attacking direction swaps with them. `length` is the pitch
-    length in metres, with x measured from one goal line (the corner origin of interfaces.py).
+    attacking half (block), home is wider (width) and longer (length), home's defensive line is
+    higher up and away's deeper (line), everyone runs towards away's goal (forward), home runs
+    more (speed). Swapping the teams negates every feature exactly, because the attacking
+    direction swaps with them. `length` is the pitch length in metres, with x measured from one
+    goal line (the corner origin of interfaces.py); only block and line use it.
     """
     sl = slice(first, last + 1)
     d = float(direction)
     own, other = (0, 1) if direction > 0 else (1, 0)  # which line column is each team's own goal side
-    raw = np.column_stack([
-        d * (scan.mean[sl, HOME, 0] + scan.mean[sl, AWAY, 0] - length),
-        scan.std[sl, HOME, 1] - scan.std[sl, AWAY, 1],
-        scan.std[sl, HOME, 0] - scan.std[sl, AWAY, 0],
-        d * (scan.line[sl, HOME, own] + scan.line[sl, AWAY, other] - length),
-        d * (scan.vel[sl, HOME, 0] + scan.vel[sl, AWAY, 0]),
-        scan.speed[sl, HOME] - scan.speed[sl, AWAY],
-    ])
-    return _smooth_nan(raw, SHAPE_SMOOTH_FRAMES)
+    columns = {
+        "block": lambda: d * (scan.mean[sl, HOME, 0] + scan.mean[sl, AWAY, 0] - length),
+        "width": lambda: scan.std[sl, HOME, 1] - scan.std[sl, AWAY, 1],
+        "length": lambda: scan.std[sl, HOME, 0] - scan.std[sl, AWAY, 0],
+        "line": lambda: d * (scan.line[sl, HOME, own] + scan.line[sl, AWAY, other] - length),
+        "forward": lambda: d * (scan.vel[sl, HOME, 0] + scan.vel[sl, AWAY, 0]),
+        "speed": lambda: scan.speed[sl, HOME] - scan.speed[sl, AWAY],
+    }
+    if not features or set(features) - set(SHAPE_COLUMNS) or len(set(features)) != len(features):
+        raise ValueError(f"shape features must be distinct names from {SHAPE_COLUMNS}, got {tuple(features)}")
+    return _smooth_nan(np.column_stack([columns[name]() for name in features]), SHAPE_SMOOTH_FRAMES)
 
 
 def attack_direction(scan: Scan, first: int, last: int) -> int:
@@ -335,17 +342,19 @@ def clear_contacts(scan: Scan, lost: BoolArray) -> FloatArray:
 
 
 def shape_logits(scan: Scan, lost: BoolArray, halves: Sequence[Interval], everywhere: bool = False,
-                 length: float = PITCH_M[0]) -> tuple[FloatArray, list[ShapeModel]]:
+                 length: float = PITCH_M[0], features: Sequence[str] = SHAPE_FEATURES
+                 ) -> tuple[FloatArray, list[ShapeModel]]:
     """([T] logit of p_home, one model per half). Each half's model is trained on that half's own
     clear contacts only. The logit is set inside halves that have a model, on lost frames only
     (or on every frame with shape features, if everywhere), and is exactly 0 everywhere else.
-    halves are inclusive (first, last) pairs; length is the pitch length (shape_features)."""
+    halves are inclusive (first, last) pairs; length and features as in shape_features."""
+    features = tuple(features)
     labels = clear_contacts(scan, lost)
     logit = np.zeros(lost.shape[0])
     models = []
     for first, last in halves:
         direction = attack_direction(scan, first, last)
-        x = shape_features(scan, first, last, direction, length)  # computed once: fit, then predict
+        x = shape_features(scan, first, last, direction, length, features)  # computed once: fit, then predict
         finite = np.isfinite(x).all(axis=1)
         y = labels[first : last + 1]
         use = (y != 0) & finite
@@ -357,7 +366,7 @@ def shape_logits(scan: Scan, lost: BoolArray, halves: Sequence[Interval], everyw
             weights = np.round(fit_logistic(y[use, None] * x[use] / scale, SHAPE_RIDGE), FIT_DECIMALS)
             on = finite if everywhere else lost[first : last + 1] & finite
             logit[first : last + 1][on] = (x[on] / scale) @ weights
-        models.append(ShapeModel(first, last, direction, n_home, n_away, scale, weights))
+        models.append(ShapeModel(first, last, direction, n_home, n_away, scale, weights, features))
     return logit, models
 
 

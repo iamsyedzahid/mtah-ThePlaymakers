@@ -1,12 +1,16 @@
-"""Calibration and choice of the evidence (R2), on Metrica's open games only.
+"""Calibration and choice of the evidence (R2), on open games only: Metrica's three, or the seven
+DFL matches.
 
     python -m mtah.evidence_fit            # leave-one-game-out table, then the calibration to ship
+    python -m mtah.evidence_fit --dfl      # the same table on the DFL matches (mtah/dfl_games.py)
 
 Never touches our match: it reads outputs/metrica/sample through mtah/metrica_games.py, where the
-labels come from Metrica's event data, the ball is hidden the way our match loses it, and (unless
---as-given) moved off its carrier the way ours sits off the players. Without that, the nearest
-player is a median 0.07-0.11 m from a slow ball instead of our 1.2 m, and every evidence looks
-twice as sure as it is on our match.
+labels come from Metrica's event data, or outputs/dfl/raw through mtah/dfl_games.py, where they
+come from the tracking provider's ball flags, as our ground truth's do. Either way the ball is
+hidden the way our match loses it, and (unless --as-given) moved off its carrier the way ours
+sits off the players. Without that, the nearest player is a median 0.07-0.11 m (Metrica) or
+0.56-0.62 m (DFL) from a slow ball in play instead of our 1.2 m, and every evidence looks surer
+than it is on our match. The shipped calibration comes from Metrica only.
 
 The comparison isolates the evidence. Every candidate goes through the same decoder: dead ball is
 taken from the event labels (so every candidate gets the same D), and inside each live stretch a
@@ -22,12 +26,13 @@ calibration, and each of those with shape added on lost frames. A candidate repl
 one only if its mean held-out spellF1 is higher by at least NOISE.
 
     python -m mtah.evidence_fit --mask-offset 10    # the same with other ball masks (robustness)
+    python -m mtah.evidence_fit --shape-features width,forward,speed    # another shape model
 """
 import argparse
 import importlib.util
 import time
 from pathlib import Path
-from typing import NamedTuple, Sequence
+from typing import Callable, NamedTuple, Sequence
 
 import numpy as np
 
@@ -61,7 +66,7 @@ MASK_SEED = {1: 1, 2: 2, 3: 3}  # one fixed ball mask per game
 class Prepared(NamedTuple):
     """One game, ball hidden, reduced to what the candidates and the decoder need."""
 
-    number: int
+    number: int | str
     gt: np.ndarray  # scorer codes, H 0, A 1, D 2, X 3
     runs: list  # pm.valid_runs(gt)
     lost: np.ndarray
@@ -79,12 +84,13 @@ class Calibration(NamedTuple):
     shape_k: float
 
 
-def prepare(game: mg.OpenGame, seed: int, displace: bool = True) -> Prepared:
+def prepare(game: mg.OpenGame, seed: int, displace: bool = True,
+            features: Sequence[str] = ev.SHAPE_FEATURES) -> Prepared:
     tr = mg.masked_tracking(game, seed, displace=displace)
     filled, lost = ball_clean(tr.ball)
     scan = ev.scan_teams(filled, tr.players, tr.team)
     lead, best, speed = ev.reach_inputs(scan, lost)
-    shape_logit, _ = ev.shape_logits(scan, lost, game.halves, length=mg.METRICA_PITCH_M[0])
+    shape_logit, _ = ev.shape_logits(scan, lost, game.halves, length=game.pitch[0], features=features)
     gt = pm.label_codes(game.labels)
     nearest = ev.nearest_evidence(tr.ball, lost, tr.players, tr.team)  # what evidence() computes
     return Prepared(game.number, gt, pm.valid_runs(gt), lost, lead, best, speed, nearest, shape_logit)
@@ -224,21 +230,34 @@ def choose(results: dict, names: Sequence[str]) -> str:
     return chosen
 
 
-def main(mask_offset: int = 0, displace: bool = True) -> None:
+def load_games(dataset: str) -> tuple[list, Callable[..., mg.OpenGame], dict]:
+    """(game ids, their loader, mask seed per game) for "metrica" or "dfl" (mtah/dfl_games.py)."""
+    if dataset == "dfl":
+        from mtah import dfl_games
+        return list(dfl_games.GAMES), dfl_games.load_match, dfl_games.MASK_SEED
+    return list(mg.GAMES), mg.load_game, MASK_SEED
+
+
+def _name(number: int | str) -> str:
+    return f"game {number}" if isinstance(number, int) else str(number)
+
+
+def main(mask_offset: int = 0, displace: bool = True, dataset: str = "metrica",
+         features: Sequence[str] = ev.SHAPE_FEATURES) -> None:
     t0 = time.perf_counter()
+    numbers, load, seeds = load_games(dataset)
     data = []
-    for number in mg.GAMES:
-        game = mg.load_game(number)
-        data.append(prepare(game, MASK_SEED[number] + mask_offset, displace))
+    for number in numbers:
+        data.append(prepare(load(number), seeds[number] + mask_offset, displace, features))  # one game in memory at a time
         d = data[-1]
         alive = (d.gt == pm.H) | (d.gt == pm.A)
-        print(f"game {number}: {len(d.gt)} frames, live {alive.mean():.3f}, lost on live frames {d.lost[alive].mean():.3f}")
+        print(f"{_name(number)}: {len(d.gt)} frames, live {alive.mean():.3f}, lost on live frames {d.lost[alive].mean():.3f}")
     results = leave_one_game_out(data)
 
-    print(f"\nleave-one-game-out spellF1 (held-out game), ties under {NOISE}, mask offset {mask_offset}, "
-          f"ball {'displaced like ours' if displace else 'as Metrica gives it'}; "
+    print(f"\nleave-one-game-out spellF1 (held-out game), ties under {NOISE}, {dataset}, mask offset {mask_offset}, "
+          f"ball {'displaced like ours' if displace else 'as given'}, shape features {','.join(features)}; "
           f"{time.perf_counter() - t0:.0f} s")
-    print(f"{'candidate':<20}" + "".join(f"{'game ' + str(d.number):>9}" for d in data) + f"{'mean':>9}{'macroF1':>9}   chosen (cost, shape weight) | spells pred/gt")
+    print(f"{'candidate':<20}" + "".join(f"{_name(d.number):>9}" for d in data) + f"{'mean':>9}{'macroF1':>9}   chosen (cost, shape weight) | spells pred/gt")
     for name in CANDIDATES:
         r = results[name]
         held = [r["held_out"][d.number] for d in data]
@@ -250,7 +269,7 @@ def main(mask_offset: int = 0, displace: bool = True) -> None:
     print(f"\nevidence(): {evidence_choice}  |  adding evidence_shape on lost frames: "
           f"{'yes' if shape_choice != evidence_choice else 'no (a tie or worse)'}")
     final = fit_calibration(data)
-    print("calibration on all three games, to ship:")
+    print(f"calibration on all {len(data)} games ({dataset}){', to ship' if dataset == 'metrica' else ', for comparison only'}:")
     print(f"    NEAREST_CALIBRATION = {final.nearest_platt}")
     print(f"    REACH_CALIBRATION = {final.reach_context if evidence_choice == 'reach_context' else final.reach_platt}")
     print(f"    SHAPE_TEMPERATURE = {final.shape_k}")
@@ -260,6 +279,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--mask-offset", type=int, default=0, help="added to every game's ball-mask seed")
     parser.add_argument("--as-given", action="store_true",
-                        help="keep Metrica's corrected ball on its carrier instead of displacing it like ours")
+                        help="keep the open data's ball on its carrier instead of displacing it like ours")
+    parser.add_argument("--dfl", action="store_true",
+                        help="the seven DFL matches (mtah/dfl_games.py) instead of Metrica's three games")
+    parser.add_argument("--shape-features", default=",".join(ev.SHAPE_FEATURES),
+                        help=f"comma-separated subset of {','.join(ev.SHAPE_COLUMNS)} (default: the shipped set)")
     args = parser.parse_args()
-    main(args.mask_offset, displace=not args.as_given)
+    main(args.mask_offset, displace=not args.as_given, dataset="dfl" if args.dfl else "metrica",
+         features=tuple(args.shape_features.split(",")))
