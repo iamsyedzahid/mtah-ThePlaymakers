@@ -45,8 +45,10 @@ def test_known_dead_frames_are_dead(syn):
     assert (codes[500:700] == 2).all()
 
 
-def test_swapping_the_teams_swaps_the_labels(syn):
-    tr = syn.tracking
+def test_swapping_the_teams_swaps_the_labels():
+    # 30,000 frames: on a few thousand R2's shape model has too little to fit and returns 0, which
+    # leaves exact H/A ties on lost frames that the Viterbi breaks towards H in both orientations.
+    tr = make_synthetic(30_000, seed=0).tracking
     straight = fusion.label(tr.ball, tr.players, tr.team, PITCH_M, [(0, tr.n_frames)])
     swapped = fusion.label(tr.ball, tr.players, 1 - tr.team, PITCH_M, [(0, tr.n_frames)])
     assert np.mean(fusion.swap_codes(straight) == swapped) > 0.99
@@ -62,14 +64,23 @@ def test_rules_follow_synthetic_possession():
 def test_learned_layer_is_deterministic_and_team_symmetric(model):
     g = _game(4_000, 5)
     again = fusion.train([_game(8_000, 11), _game(8_000, 12)])
-    f = fusion.frame_features(g["ball"], g["players"], g["team"], g["pitch"])
-    p1 = fusion.learned_logp(model, f, g["players"], g["team"], g["pitch"], g["halves"])
-    p2 = fusion.learned_logp(again, f, g["players"], g["team"], g["pitch"], g["halves"])
-    np.testing.assert_array_equal(p1, p2)
-    flipped_team = 1 - g["team"]
-    f_flip = fusion.frame_features(g["ball"], g["players"], flipped_team, g["pitch"])
-    p_flip = fusion.learned_logp(model, f_flip, g["players"], flipped_team, g["pitch"], g["halves"])
-    np.testing.assert_allclose(p_flip[:, [1, 0, 2]], p1, atol=1e-9)
+    def logp(m, team):
+        f = fusion.frame_features(g["ball"], g["players"], team, g["pitch"])
+        extra = fusion.extra_columns(fusion.team_inputs(g["ball"], g["players"], team, g["pitch"], g["halves"]))
+        return fusion.learned_logp(m, f, g["players"], team, g["pitch"], g["halves"], extra)
+
+    p1 = logp(model, g["team"])
+    np.testing.assert_array_equal(p1, logp(again, g["team"]))
+    np.testing.assert_allclose(logp(model, 1 - g["team"])[:, [1, 0, 2]], p1, atol=1e-9)
+
+
+def test_teammate_inputs_change_sign_with_the_teams():
+    g = _game(4_000, 6)
+    straight = fusion.extra_columns(fusion.team_inputs(g["ball"], g["players"], g["team"], g["pitch"], g["halves"]))
+    swapped = fusion.extra_columns(fusion.team_inputs(g["ball"], g["players"], 1 - g["team"], g["pitch"], g["halves"]))
+    cols, signs = straight
+    assert cols.shape == (4_000, 7) and np.isfinite(cols).all()
+    np.testing.assert_allclose(swapped[0], cols * signs, atol=1e-9)
 
 
 def test_learned_features_have_no_missing_values(syn):

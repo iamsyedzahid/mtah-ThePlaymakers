@@ -26,16 +26,19 @@ The pipeline is `mtah/fusion.py`; `run.py --real` runs it.
    speed, how far the ball is outside the pitch, and each team's centroid and spread.
 2. **Team evidence.** The difference between the two teams' nearest distances, weighted down when
    nobody is near the ball and when it flies (over 10 m/s). With the ball missing, a **shape model** takes
-   over: a logistic model on team shape, fitted separately in each half on that half's own clear contacts
-   (one team within 1.5 m of the ball, the other over 3 m). These are pseudo-labels made by an algorithm
-   (RULES.md), and refitting per half follows the change of ends and of tactics.
+   over: R2's logistic model on team shape (`mtah/evidence.py`, through `mtah/r2_features.py`), fitted
+   separately in each half on that half's own clear contacts. These are pseudo-labels made by an
+   algorithm (RULES.md), and refitting per half follows the change of ends and of tactics.
 3. **Dead-ball evidence.** The ball more than 0.5 m outside the pitch; a ball at rest among slow
    players; a missing ball among slow players (a weak cue: a missing ball alone is never dead); and,
    per half, a two-group fit of collective player speed that separates slow phases from fast ones
    without a fixed threshold.
-4. **Learned layer.** A gradient-boosted classifier (scikit-learn) on 32 features: the above, plus
-   averages over windows of about 1, 3 and 8 s around each frame, and the ball's position and motion
-   relative to each team's attacking direction. It is trained with home and away swapped as well, and
+4. **Learned layer.** A gradient-boosted classifier (scikit-learn) on 39 features: the above, plus
+   averages over windows of about 1, 3 and 8 s around each frame, the ball's position and motion
+   relative to each team's attacking direction, R2's four evidence columns (nearest-player evidence,
+   time-to-ball lead, and the shape model on every frame and on lost frames), and three from R3's
+   receptions (`mtah/touches.py`: the team of the half's latest reception, seconds since it, and home
+   minus away receptions over the last 10 s). It is trained with home and away swapped as well, and
    applied both ways round and averaged, so it cannot favour either team.
 5. **Decoding.** One Viterbi pass per half over H, A and D, with a cost for switching team and a higher
    one for switching to or from D. Short possessions are kept (see "How settings were chosen").
@@ -110,6 +113,20 @@ scored with the official scorer (`evaluation/possession_metrics.py`). Difference
 Training on both ties the best single source on each benchmark, and beats the Metrica-only model by 0.06
 to 0.08 on the matches whose labels are built like our ground truth.
 
+**The team's modules as inputs.** R2's shape model in place of ours, plus R2's and R3's signals as
+learned-layer inputs, were then tested the same way, held out in turn on all ten matches, and also with
+the ball moved 0.3-2.5 m off its carrier the way ours sits (see Limitations). For an average over ten
+matches, the 0.04 band for one match is too blunt, so each change was judged by its paired gain per
+match, with a bootstrap range for the mean gain.
+
+| Change against the row above (spellF1) | Gain, as trained | Gain, ball moved off the carrier |
+|---|---|---|
+| R2's shape model only | +0.010, better on 8 of 10 | +0.009, better on 7 of 10 |
+| R2's shape model and R3's receptions | +0.017, 9 of 10 (range +0.010 to +0.024) | +0.011, 9 of 10 (+0.005 to +0.018) |
+| **R2's shape model, R2's and R3's inputs (submitted)** | **+0.019, 10 of 10 (+0.011 to +0.028)** | **+0.020, 9 of 10 (+0.012 to +0.029)** |
+
+The submitted version scores 0.658 on Metrica's three games and 0.520 on the seven DFL matches.
+
 **Short possessions are kept.** An earlier version merged possessions under 2 s into their neighbours,
 as a guard in case our ground truth was less fragmented than event labels. The DFL labels answered that:
 labels built from tracking are more fragmented, not less.
@@ -179,10 +196,10 @@ Metrica), and merging possessions under 2 s (see above).
 
 | | Value |
 |---|---|
-| Benchmark, held out in turn, spellF1 | Metrica 0.652, DFL 0.496 |
-| Graded frames, H / A / D | 37.1% / 27.6% / 35.3% |
-| Possessions in the graded halves | 399 (205 and 194), 3.77 a minute |
-| SHA-256 of the submission file | `c5c4cafdfd03e7496fb2ce12f65eb7d4617dfad45ce260b9e6141fcecbb1f5b7` |
+| Benchmark, held out in turn, spellF1 | Metrica 0.658, DFL 0.520 |
+| Graded frames, H / A / D | (to fill from the real-match run) |
+| Possessions in the graded halves | (to fill from the real-match run) |
+| SHA-256 of the submission file | (to fill from the real-match run) |
 
 ## Reproduction
 

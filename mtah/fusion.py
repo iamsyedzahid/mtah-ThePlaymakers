@@ -38,9 +38,10 @@ SWITCH_TEAM, SWITCH_DEAD = 14.0, 30.0
 MISSING = -1.0  # how a missing feature value reaches the learned layer, in training and in use
 SHAPE_WEIGHT = 0.6
 
-# Teammates' signals (team_inputs). Off unless the open-games benchmark says otherwise.
-SHAPE_SOURCE = "ours"  # or "r2": R2's per-half shape model on lost frames, in place of ours
-EXTRA: tuple[str, ...] = ()  # learned-layer inputs to add: "r3" (R3's receptions), "r2" (R2's four columns)
+# Teammates' signals (team_inputs). Held out on the ten open matches, R2's shape model plus both their
+# input sets gained +0.019 spellF1 as trained (better on 10/10) and +0.020 with the ball displaced (9/10).
+SHAPE_SOURCE = "r2"  # "r2": R2's per-half shape model on lost frames; "ours": the earlier one
+EXTRA: tuple[str, ...] = ("r2", "r3")  # learned-layer inputs: "r2" (R2's four columns), "r3" (R3's receptions)
 R2_SHAPE_COLUMN = 2  # "r2_shape" in mtah/r2_features.FEATURE_NAMES
 TEAM_INPUT_SIGNS = {"r2": np.array([-1.0, -1.0, -1.0, -1.0]), "r3": np.array([-1.0, 1.0, -1.0])}
 R3_SINCE_CAP_S = 30.0
