@@ -12,13 +12,13 @@
 
 *.md                    @ThePlaymakers/r5
 
-/mtah/__init__.py       @ThePlaymakers/r1
-/mtah/io_atd.py         @ThePlaymakers/r1
-/mtah/teams.py          @ThePlaymakers/r1
-/mtah/ball.py           @ThePlaymakers/r1
-/mtah/config.py         @ThePlaymakers/r1
+/mtah/__init__.py       @iamsyedzahid
+/mtah/io_atd.py         @iamsyedzahid
+/mtah/teams.py          @iamsyedzahid
+/mtah/ball.py           @iamsyedzahid
+/mtah/config.py         @iamsyedzahid
 
-/mtah/evidence.py       @ThePlaymakers/r2
+/mtah/evidence.py       @smawahid
 
 /mtah/touches.py        @ThePlaymakers/r3
 /mtah/tagging.py        @ThePlaymakers/r3
@@ -29,6 +29,7 @@
 /mtah/fusion.py         @ThePlaymakers/r4
 
 /mtah/opengames.py      @ThePlaymakers/r5
+/mtah/dfl.py            @ThePlaymakers/r5
 
 /mtah/synthetic.py      @ThePlaymakers/r5
 /scripts/               @ThePlaymakers/r5

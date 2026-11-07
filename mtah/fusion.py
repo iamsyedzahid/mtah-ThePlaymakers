@@ -1,8 +1,10 @@
 """The submission pipeline: per-frame evidence from rules and a learned model, decoded by Viterbi.
 
-Chosen on Metrica's three open games (mtah/opengames.py), the one labelled benchmark the rules allow:
-held out one at a time, it scored spellF1 0.615 against 0.496 for our rule-only pipeline (run.py's
-synthetic path). Built from ideas pooled across team forks; see docs/TECHNICAL.md.
+Chosen on two labelled benchmarks of other matches, which the rules allow: Metrica's three open games
+(mtah/opengames.py, labels from their events) and seven DFL Bundesliga matches (mtah/dfl.py, labels
+from tracking ownership like our ground truth). Trained on both, with each match held out in turn, it
+scores spellF1 0.652 on Metrica's games and 0.496 on the DFL matches, against 0.507 and 0.361 for the
+rules alone. Built from ideas pooled across team forks; see docs/TECHNICAL.md.
 
 Inputs are plain arrays in metres, x in [0, L], y in [0, W]: ball [T, 2] and players [T, S, 2] with NaN
 where unseen, team [S] with 0 = home. Output codes [T]: 0 = H, 1 = A, 2 = D, 3 = X (outside the halves).
@@ -19,8 +21,9 @@ where unseen, team [S] with 0 = home. Output codes [T]: 0 = H, 1 = A, 2 = D, 3 =
 4. Learned layer (`train`, `learned_logp`): a gradient-boosted classifier on windowed features, trained
    on the open games with home and away swapped as well, and applied both ways round and averaged, so it
    cannot favour either team. Missing values are filled the same way in training and in use.
-5. Decoding (`label`): one Viterbi pass per half over H, A and D with switch costs, then possessions
-   under MIN_SPELL_FRAMES between two of the other team's are merged into them.
+5. Decoding (`label`): one Viterbi pass per half over H, A and D with switch costs. Short possessions
+   are kept: tracking-derived labels are fragmented (DFL: 38-50% of possessions under 3 s), and merging
+   those under 2 s cost 0.02 on all seven DFL matches. `absorb_short` stays for anyone who wants it.
 
 Every fitted step is deterministic: fixed seeds, and callers run it on one thread (run.py).
 """
@@ -29,7 +32,7 @@ import numpy as np
 from mtah.config import FPS
 
 H, A, D, X = 0, 1, 2, 3
-MIN_SPELL_FRAMES = 2 * FPS  # costs 0.039 on the open games' fragmented event labels; guards against tiny possessions
+MIN_SPELL_FRAMES = 0  # no merge: 2 s cost 0.02 on the DFL matches and 0.039 on Metrica's
 W_RULE, W_LEARNED = 1.0, 0.5
 SWITCH_TEAM, SWITCH_DEAD = 14.0, 30.0
 MISSING = -1.0  # how a missing feature value reaches the learned layer, in training and in use
@@ -223,22 +226,30 @@ def swap_codes(codes):
     return out
 
 
-def train(games):
-    """Fit the learned layer. games: dicts with ball, players, team, pitch, halves and codes (0-3)."""
+def training_rows(gm):
+    """One game's (features, codes) pairs, as it is and with home and away swapped. Graded frames only."""
+    f = frame_features(gm["ball"], gm["players"], gm["team"], gm["pitch"])
+    rows = []
+    for swap in (False, True):
+        feats, _ = learned_features(f, gm["players"], gm["team"], gm["pitch"], gm["halves"], swap=swap)
+        y = swap_codes(gm["codes"]) if swap else gm["codes"]
+        keep = y != X
+        rows.append((feats[keep], y[keep]))
+    return rows
+
+
+def fit(rows):
+    """Fit the learned layer on training_rows output, in the order given."""
     from sklearn.ensemble import HistGradientBoostingClassifier
 
-    Xs, ys = [], []
-    for gm in games:
-        f = frame_features(gm["ball"], gm["players"], gm["team"], gm["pitch"])
-        for swap in (False, True):
-            feats, _ = learned_features(f, gm["players"], gm["team"], gm["pitch"], gm["halves"], swap=swap)
-            y = swap_codes(gm["codes"]) if swap else gm["codes"]
-            keep = y != X
-            Xs.append(feats[keep])
-            ys.append(y[keep])
     model = HistGradientBoostingClassifier(max_iter=250, learning_rate=0.06, max_leaf_nodes=24,
                                            min_samples_leaf=200, l2_regularization=1.0, random_state=0)
-    return model.fit(np.vstack(Xs), np.concatenate(ys))
+    return model.fit(np.vstack([x for x, _ in rows]), np.concatenate([y for _, y in rows]))
+
+
+def train(games):
+    """Fit the learned layer. games: dicts with ball, players, team, pitch, halves and codes (0-3)."""
+    return fit([r for gm in games for r in training_rows(gm)])
 
 
 def learned_logp(model, f, players, team, pitch, halves):
@@ -268,7 +279,7 @@ def viterbi(score, switch_team=SWITCH_TEAM, switch_dead=SWITCH_DEAD):
     return path
 
 
-def absorb_short(path, min_frames=MIN_SPELL_FRAMES):
+def absorb_short(path, min_frames=2 * FPS):
     """A possession under min_frames between two of the other team's, with no dead ball between, joins them."""
     p = path.copy()
     change = np.flatnonzero(np.diff(p)) + 1

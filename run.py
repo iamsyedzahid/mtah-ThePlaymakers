@@ -6,8 +6,9 @@
     python run.py                                   # synthetic, rule-only, 199,319 frames -> outputs/synthetic.csv
     python run.py --frames 5000 --out outputs/small.csv
 
---real needs the data bundle ($MTAH_DATA_DIR, else data/ in this folder) and Metrica's open sample
-games, which train the learned layer ($MTAH_OPEN_GAMES or --open-games; see mtah/opengames.py). The
+--real needs the data bundle ($MTAH_DATA_DIR, else data/ in this folder), Metrica's open sample games
+and the DFL open matches, which train the learned layer ($MTAH_OPEN_GAMES or --open-games, see
+mtah/opengames.py; $MTAH_DFL_GAMES or --dfl-games, see mtah/dfl.py). The
 first run reads the ATD and caches it in outputs/cache/, which takes a few minutes. Without --real
 nothing reads either.
 """
@@ -52,19 +53,20 @@ def predict(tracking: Tracking, set_pieces: Sequence[SetPiece], extra_dead: Sequ
     return segment(e, lost, join_close(dead_mask(tracking.n_frames, intervals)), events)
 
 
-def predict_real(open_games: str | None = None) -> LabelArray:
-    """The submission: mtah/fusion.py, its learned layer trained on Metrica's open games.
+def predict_real(open_games: str | None = None, dfl_games: str | None = None) -> LabelArray:
+    """The submission: mtah/fusion.py, its learned layer trained on Metrica's open games and the DFL
+    open matches.
 
     Inside the graded halves only, X outside them, which is never scored. The one frame-specific fact is
     published: the second half kicks off late (FAQ.md). One thread, so every computer writes the same file.
     """
     from threadpoolctl import threadpool_limits
 
-    from mtah import fusion, opengames
+    from mtah import dfl, fusion, opengames
     from mtah.io_atd import default_cache, load_tracking
 
     with threadpool_limits(1):
-        model = fusion.train(opengames.training_games(open_games))
+        model = fusion.train(opengames.training_games(open_games) + dfl.training_games(dfl_games))
         tracking = load_tracking(default_cache())
         known_dead = np.zeros(tracking.n_frames, dtype=bool)
         known_dead[SECOND_HALF_D_BLOCK[0] : SECOND_HALF_D_BLOCK[1] + 1] = True
@@ -96,8 +98,9 @@ def write_csv(labels: LabelArray, out: Path) -> None:
     out.write_text("frame,label\n" + rows, encoding="utf-8", newline="\n")
 
 
-def main_real(out: Path = DEFAULT_REAL_OUT, rules: bool = False, open_games: str | None = None) -> LabelArray:
-    labels = predict_real_rules() if rules else predict_real(open_games)
+def main_real(out: Path = DEFAULT_REAL_OUT, rules: bool = False, open_games: str | None = None,
+              dfl_games: str | None = None) -> LabelArray:
+    labels = predict_real_rules() if rules else predict_real(open_games, dfl_games)
     write_csv(labels, out)
     print(f"wrote {out} ({len(labels)} frames)")
     # Totals per half too: the two halves should look alike, a sign it holds up over the whole match.
@@ -134,11 +137,12 @@ if __name__ == "__main__":
     parser.add_argument("--real", action="store_true", help="the real match instead of synthetic data")
     parser.add_argument("--rules", action="store_true", help="with --real: the earlier rule-only pipeline")
     parser.add_argument("--open-games", default=None, help="with --real: the folder holding Sample_Game_1..3")
+    parser.add_argument("--dfl-games", default=None, help="with --real: the folder holding the DFL open XML files")
     parser.add_argument("--frames", type=int, default=N_FRAMES, help="synthetic only")
     parser.add_argument("--out", type=Path, default=None)
     parser.add_argument("--seed", type=int, default=0, help="synthetic only")
     args = parser.parse_args()
     if args.real:
-        main_real(args.out or DEFAULT_REAL_OUT, rules=args.rules, open_games=args.open_games)
+        main_real(args.out or DEFAULT_REAL_OUT, rules=args.rules, open_games=args.open_games, dfl_games=args.dfl_games)
     else:
         main(args.out or DEFAULT_OUT, args.frames, args.seed)
