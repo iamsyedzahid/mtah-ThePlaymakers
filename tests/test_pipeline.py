@@ -129,7 +129,40 @@ def test_synthetic_corner_origin(syn):
 # Control evidence (R2) is tested in tests/test_r2_evidence.py.
 
 
-# Touches and Smart Tagging (R3) are tested in tests/test_r3_touches.py and test_r3_tagging.py.
+def test_evidence_sign():
+    # Two still scenes, not one track: a ball moving 9 m in one frame is a glitch that ball_clean
+    # flags lost, and evidence is exactly 0 on lost frames.
+    players = np.array([[[0.0, 0.0], [10.0, 0.0]]] * 2)  # home at origin, away at x=10
+    near_home = Tracking(np.array([[0.5, 0.0]] * 2), players, np.array([0, 1]))
+    near_away = Tracking(np.array([[9.5, 0.0]] * 2), players, np.array([0, 1]))
+    assert (evidence.evidence(near_home) > 0).all()
+    assert (evidence.evidence(near_away) < 0).all()
+
+
+# -- touches (R3) -----------------------------------------------------------------------------
+
+def test_touches_indexing(syn):
+    events = touches.touches(syn.tracking.ball, syn.tracking.players, syn.tracking.team)
+    assert events, "synthetic match should have touches"
+    frames = [t.frame for t in events]
+    assert frames == sorted(frames)
+    assert all(isinstance(f, int) and 0 <= f < T for f in frames)
+    assert {t.team for t in events} <= {0, 1}
+    assert {t.kind for t in events} <= {"reception", "deflection"}
+
+
+def test_touches_hand_built():
+    n = 40
+    players = np.zeros((n, 2, 2))
+    players[:, 1] = [20.0, 0.0]
+    ball_xy = np.full((n, 2), 50.0)  # far from everyone
+    ball_xy[10:20] = [0.3, 0.0]  # 10 frames with home player 0 -> reception at frame 10
+    ball_xy[30:32] = [20.2, 0.0]  # 2 frames with away player 1 -> deflection at frame 30
+    ball_xy[15] = np.nan  # a lost frame splits the contact; no touch on the NaN frame
+    events = touches.touches(ball_xy, players, np.array([0, 1]))
+    assert Touch(10, 0, "reception") in events
+    assert Touch(30, 1, "deflection") in events
+    assert all(t.frame != 15 for t in events)
 
 
 # -- dead ball, segment, X policy (R4) --------------------------------------------------------

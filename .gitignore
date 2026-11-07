@@ -49,6 +49,9 @@ data/*
 # tree, and this repository is public.
 *.pdf
 
+# Archives passed between teammates (code bundles, exports): shared directly, never committed.
+*.tgz
+
 # Organiser tooling lives in ../mtah2027-organizers, outside this repository. This line is
 # insurance against it being recreated in here by habit.
 organizers/
@@ -98,3 +101,6 @@ __pycache__/
 # Personal Claude Code settings and guard hook: local to each machine, never committed.
 .claude/settings.local.json
 .claude/hooks/
+
+# R3 planning directory - local only, never commit
+plan/

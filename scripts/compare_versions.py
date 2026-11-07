@@ -18,9 +18,17 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "evaluation"))
 
-import possession_metrics as pm  # noqa: E402
+
+def _official_scorer():
+    """evaluation/possession_metrics.py, imported by its path: nothing added to sys.path can shadow it."""
+    spec = importlib.util.spec_from_file_location("possession_metrics", ROOT / "evaluation" / "possession_metrics.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+pm = _official_scorer()
 
 from mtah.config import N_FRAMES  # noqa: E402
 from mtah.synthetic import make_synthetic  # noqa: E402

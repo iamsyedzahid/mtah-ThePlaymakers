@@ -19,6 +19,10 @@
 /mtah/config.py         @iamsyedzahid
 
 /mtah/evidence.py       @SMAWAHID
+/mtah/evidence_fit.py   @SMAWAHID
+/mtah/metrica_games.py  @SMAWAHID
+/mtah/dfl_games.py      @SMAWAHID
+/mtah/r2_features.py    @SMAWAHID
 
 /mtah/touches.py        @Abdullah-Sonija
 /mtah/tagging.py        @Abdullah-Sonija
