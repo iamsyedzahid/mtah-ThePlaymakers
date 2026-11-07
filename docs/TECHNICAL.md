@@ -162,8 +162,8 @@ rule-only pipeline and on the earlier submitted version (spellF1 0.553 there, 17
   nearest player is a median 0.04-0.09 m away, against 1.21 m on our match (moving it 0.3-2.5 m off
   brings Metrica's to 1.09-1.27 m). A model trained on balls at the players' feet may read our match's
   proximity as weaker than it is.
-- **Dead ball.** On our match the pipeline marks 35.3% of graded frames D: 29.4% in the first half and
-  41.1% in the second, of which 3.7 points are the published block. The earlier rule-only pipeline,
+- **Dead ball.** On our match the pipeline marks 35.1% of graded frames D: 29.4% in the first half and
+  40.9% in the second, of which 3.7 points are the published block. The earlier rule-only pipeline,
   built on different cues (set-piece tags, a still camera, slow players), also finds more D after the
   break (24.4% and 31.6%), so the second half of this match likely has more stoppages. On the DFL
   matches, whose labels are built like ours, D is 41-52% of frames.
@@ -197,13 +197,13 @@ Metrica), and merging possessions under 2 s (see above).
 | | Value |
 |---|---|
 | Benchmark, held out in turn, spellF1 | Metrica 0.658, DFL 0.520 |
-| Graded frames, H / A / D | (to fill from the real-match run) |
-| Possessions in the graded halves | (to fill from the real-match run) |
-| SHA-256 of the submission file | (to fill from the real-match run) |
+| Graded frames, H / A / D | 36.9% / 28.0% / 35.1% |
+| Possessions in the graded halves | 389 (195 and 194), 3.67 a minute, median 6.2 s |
+| SHA-256 of the submission file | `2d90fff543cdf29a6ea15c444a79c5c9969fa35ec0bb682afb2f365b631d0f62` |
 
 ## Reproduction
 
-Needs Python 3.15, the competition data bundle and both open datasets. No GPU. About 4 minutes after the
+Needs Python 3.15, the competition data bundle and both open datasets. No GPU. About 5 minutes after the
 first run, most of it training on one thread.
 
 ```
