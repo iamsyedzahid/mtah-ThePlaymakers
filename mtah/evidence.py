@@ -5,10 +5,13 @@ out, positive for home, always finite.
 
 evidence_reach: time-to-ball control, exactly 0 where ball_clean's lost_mask is True. Each player's
     time to reach the ball is a reaction time plus a straight run at MAX_RUN_MS from where their
-    current velocity carries them during the reaction (a simple pitch-control model, after
-    Spearman 2018). Each team keeps its best time, which makes duplicated slots harmless and slot
-    order irrelevant, and the difference between the two teams' best times goes through a
-    logistic: e = 2 * p_home - 1.
+    current velocity carries them during the reaction, to where the ball's own velocity carries
+    it in the same time (a simple pitch-control model, after Spearman 2018). Moving the ball
+    matters: with a still ball, a dribbler running with it is projected metres past it and loses
+    it to a defender standing alongside (measured on the Metrica games: sign accuracy at dribbling
+    speed 0.65 against 0.88 for the nearest player). Each team keeps its best time, which makes
+    duplicated slots harmless and slot order irrelevant, and the difference between the two
+    teams' best times goes through a logistic: e = 2 * p_home - 1.
 
 evidence_shape: the complement, for the frames evidence() has to leave at 0. Non-zero only where
     lost_mask is True, exactly 0 elsewhere. Per half, a logistic model on ball-free team-shape
@@ -16,6 +19,9 @@ evidence_shape: the complement, for the frames evidence() has to leave at 0. Non
     on that half's own clear contacts: trusted frames where one team's nearest player is within
     SHAPE_NEAR_M of the ball and the other's beyond SHAPE_FAR_M. Those pseudo-labels are made by
     an algorithm from the tracking; no hand labels. R4 may add it to evidence() on lost frames.
+
+evidence_calibrated, evidence_shape_calibrated: the two above with the calibration fitted on
+    Metrica's open games (REACH_CALIBRATION, SHAPE_TEMPERATURE; mtah/evidence_fit.py).
 
 evidence: still the naive placeholder (nearest player, weighted by distance) until the
     leave-one-game-out comparison on the Metrica open games picks the combination to ship.
@@ -58,6 +64,17 @@ SHAPE_LINE = (1, 5)  # sorted from the own goal: skip the deepest (the keeper), 
 SHAPE_FEATURES = ("block", "width", "length", "line", "forward", "speed")
 FIT_DECIMALS = 6  # fitted weights are rounded, so last-bit BLAS differences cannot reach labels
 
+# Calibration, fitted on Metrica's open games only (python -m mtah.evidence_fit prints these).
+# Reach: logit p_home = lead * max(a + b * best_t + c * ball_speed, 0), so the faster team is
+# always favoured, more when someone is near the ball and the ball is slow. (a, 0, 0) is plain
+# Platt scaling. Shape: logit p_home = k * the half's own model logit.
+# Fitted on games 1-3 (sample-data commit e706dd5, ball masks of seed offset 0); rerun the command
+# above to regenerate them. The nearest-player evidence needs no calibration: its fitted Platt
+# slope is 0.97, so exp(-distance / SIGMA_M) already says what it means.
+REACH_CALIBRATION = (1.815218, 0.0, 0.0)
+SHAPE_TEMPERATURE = 0.647477
+BALL_VEL_HALF_FRAMES = 3  # ball velocity from a central difference over 6 frames (0.24 s)
+
 
 class Scan(NamedTuple):
     """Per-frame, per-team summaries; column 0 is home and 1 is away."""
@@ -70,6 +87,7 @@ class Scan(NamedTuple):
     vel: FloatArray  # [T, 2, 2] team mean velocity x, y (m/s)
     speed: FloatArray  # [T, 2] team mean speed (m/s)
     line: FloatArray  # [T, 2, 2] defensive line x when attacking towards +x [..., 0] or -x [..., 1]
+    ball_speed: FloatArray  # [T] m/s, from the filled ball (meaningless on lost frames)
 
 
 class ShapeModel(NamedTuple):
@@ -89,13 +107,23 @@ class ShapeModel(NamedTuple):
 def evidence(tracking: Tracking) -> FloatArray:
     _check_fps(tracking)
     _, lost = ball_clean(tracking.ball)
-    dist = np.linalg.norm(tracking.players - tracking.ball[:, None, :], axis=2)  # [T, S]
-    e = np.zeros(tracking.n_frames)
-    rows = np.flatnonzero(~np.isnan(dist).all(axis=1) & ~lost)  # ball trusted and a player seen
-    if rows.size:
-        nearest = np.nanargmin(dist[rows], axis=1)
-        sign = np.where(tracking.team[nearest] == HOME, 1.0, -1.0)
-        e[rows] = sign * np.exp(-dist[rows, nearest] / SIGMA_M)
+    return nearest_evidence(tracking.ball, lost, tracking.players, tracking.team)
+
+
+def nearest_evidence(ball: FloatArray, lost: BoolArray, players: FloatArray, team: np.ndarray) -> FloatArray:
+    """The nearest player's team, weighted by exp(-distance / SIGMA_M), from the raw ball; 0
+    where lost_mask is True or nobody is seen. In frame blocks, like scan_teams, so the full
+    match never holds a [T, S, 2] difference array."""
+    T = ball.shape[0]
+    e = np.zeros(T)
+    for a in range(0, T, BLOCK_FRAMES):
+        b = min(a + BLOCK_FRAMES, T)
+        dist = np.linalg.norm(players[a:b] - ball[a:b, None, :], axis=2)  # [B, S]
+        rows = np.flatnonzero(~np.isnan(dist).all(axis=1) & ~lost[a:b])  # ball trusted, a player seen
+        if rows.size:
+            nearest = np.nanargmin(dist[rows], axis=1)
+            sign = np.where(team[nearest] == HOME, 1.0, -1.0)
+            e[a + rows] = sign * np.exp(-dist[rows, nearest] / SIGMA_M)
     return e
 
 
@@ -111,6 +139,52 @@ def evidence_shape(tracking: Tracking) -> FloatArray:
     filled, lost = ball_clean(tracking.ball)
     scan = scan_teams(filled, tracking.players, tracking.team)
     return logit_to_evidence(shape_logits(scan, lost, halves_for(tracking.n_frames))[0])
+
+
+def evidence_calibrated(tracking: Tracking) -> FloatArray:
+    """evidence_reach with the time lead mapped to p_home by REACH_CALIBRATION."""
+    _check_fps(tracking)
+    filled, lost = ball_clean(tracking.ball)
+    scan = scan_teams(filled, tracking.players, tracking.team)
+    return logit_to_evidence(calibrated_logit(*reach_inputs(scan, lost), REACH_CALIBRATION))
+
+
+def evidence_shape_calibrated(tracking: Tracking) -> FloatArray:
+    """evidence_shape with the logit scaled by SHAPE_TEMPERATURE."""
+    _check_fps(tracking)
+    filled, lost = ball_clean(tracking.ball)
+    scan = scan_teams(filled, tracking.players, tracking.team)
+    return logit_to_evidence(SHAPE_TEMPERATURE * shape_logits(scan, lost, halves_for(tracking.n_frames))[0])
+
+
+def reach_inputs(scan: Scan, lost: BoolArray) -> tuple[FloatArray, FloatArray, FloatArray]:
+    """(lead, best_t, ball_speed), [T] each: home's time lead (0 where lost or a team is not
+    tracked), the faster team's time (capped) and the ball's speed in m/s."""
+    lead = time_lead(scan.t_best[:, HOME], scan.t_best[:, AWAY], lost)
+    best = np.minimum(np.minimum(scan.t_best[:, HOME], scan.t_best[:, AWAY]), TIME_CAP_S)
+    return lead, best, scan.ball_speed
+
+
+def calibrated_logit(lead: FloatArray, best_t: FloatArray, speed: FloatArray, params: Sequence[float]) -> FloatArray:
+    """lead * max(a + b * best_t + c * speed, 0). Odd in lead, so swapping teams negates it."""
+    a, b, c = params
+    return lead * np.maximum(a + b * best_t + c * speed, 0.0)
+
+
+def ball_velocity(filled: FloatArray) -> FloatArray:
+    """[T, 2] m/s from a NaN-free ball track: central difference over 2 * BALL_VEL_HALF_FRAMES,
+    the end frames copying their neighbour; 0 for a track too short to difference."""
+    k, n = BALL_VEL_HALF_FRAMES, filled.shape[0]
+    vel = np.zeros((n, 2))
+    if n > 2 * k:
+        vel[k : n - k] = (filled[2 * k :] - filled[: n - 2 * k]) * FPS / (2 * k)
+        vel[:k], vel[n - k :] = vel[k], vel[n - k - 1]
+    return vel
+
+
+def ball_speed(filled: FloatArray) -> FloatArray:
+    """[T] m/s, the length of ball_velocity."""
+    return np.linalg.norm(ball_velocity(filled), axis=1)
 
 
 # -- time to the ball ---------------------------------------------------------------------------
@@ -139,13 +213,16 @@ def scan_teams(ball: FloatArray, players: FloatArray, team: np.ndarray) -> Scan:
     """Everything the evidence functions need from the players, in one pass over frame blocks.
 
     ball must be NaN-free (ball_clean's filled track); on lost frames the ball-based columns are
-    meaningless and the callers ignore them. Velocities are computed once per block, with
+    meaningless and the callers ignore them. Player velocities are computed once per block, with
     2 * VEL_HALF_FRAMES of context either side so blocks give the same result as one pass.
     """
     T = ball.shape[0]
     pad = 2 * VEL_HALF_FRAMES
+    ball_vel = ball_velocity(ball)
+    target = ball + ball_vel * REACTION_S  # where the ball is once the players react
     inf2, nan2, nan22 = np.full((T, 2), np.inf), np.full((T, 2), np.nan), np.full((T, 2, 2), np.nan)
-    scan = Scan(inf2, inf2.copy(), np.zeros((T, 2)), nan22, nan22.copy(), nan22.copy(), nan2, nan22.copy())
+    scan = Scan(inf2, inf2.copy(), np.zeros((T, 2)), nan22, nan22.copy(), nan22.copy(), nan2, nan22.copy(),
+                np.linalg.norm(ball_vel, axis=1))
     sides = [(side, team == side) for side in (HOME, AWAY) if (team == side).any()]
     for a in range(0, T, BLOCK_FRAMES):
         b = min(a + BLOCK_FRAMES, T)
@@ -154,7 +231,7 @@ def scan_teams(ball: FloatArray, players: FloatArray, team: np.ndarray) -> Scan:
         pos = players[a:b]
         seen = ~np.isnan(pos[..., 0])
         start = pos + vel * REACTION_S  # where each player is once they react
-        time = REACTION_S + np.linalg.norm(ball[a:b, None, :] - start, axis=2) / MAX_RUN_MS
+        time = REACTION_S + np.linalg.norm(target[a:b, None, :] - start, axis=2) / MAX_RUN_MS
         time = np.where(seen, time, np.inf)
         dist = np.where(seen, np.linalg.norm(ball[a:b, None, :] - pos, axis=2), np.inf)
         speed = np.linalg.norm(vel, axis=2)
@@ -278,6 +355,11 @@ def shape_logits(scan: Scan, lost: BoolArray, halves: Sequence[Interval]) -> tup
 def logit_to_evidence(logit: FloatArray) -> FloatArray:
     """2 * sigmoid(logit) - 1, written so that negating the logit negates e bit for bit."""
     return np.sign(logit) * np.tanh(np.abs(logit) / 2.0)
+
+
+def evidence_to_logit(e: FloatArray) -> FloatArray:
+    """The inverse of logit_to_evidence, with |e| kept below 1 so the logit stays finite."""
+    return np.sign(e) * 2.0 * np.arctanh(np.minimum(np.abs(e), 1.0 - 1e-12))
 
 
 def fit_logistic(z: FloatArray, ridge: float, max_iter: int = 100, tol: float = 1e-10) -> FloatArray:

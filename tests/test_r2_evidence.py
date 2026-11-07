@@ -1,8 +1,13 @@
-"""Evidence (R2). Synthetic and hand-built data only."""
+"""Evidence (R2). Synthetic and hand-built data only, never the match or the Metrica files."""
+import itertools
+import json
+
 import numpy as np
 import pytest
 
 from mtah import evidence as ev
+from mtah import evidence_fit as fit
+from mtah import metrica_games as mg
 from mtah.ball import ball_clean
 from mtah.interfaces import Tracking
 from mtah.synthetic import make_synthetic
@@ -48,14 +53,17 @@ def test_sign_follows_nearer_team_hand_built(fn):
 
 @pytest.mark.parametrize("fn", EVIDENCE, ids=IDS)
 def test_sign_follows_nearer_team_synthetic(big, fn):
+    # A ball at a player's feet (slow), not one in flight: a pass skimming past a player is on
+    # its way to someone else, and reach rightly follows where the ball is going.
     tr = big.tracking
     filled, lost = ball_clean(tr.ball)
     dist = np.linalg.norm(tr.players - filled[:, None, :], axis=2)
     dist = np.where(np.isnan(dist), np.inf, dist)
     near_home, near_away = dist[:, tr.team == 0].min(axis=1), dist[:, tr.team == 1].min(axis=1)
     e = fn(tr)
-    clear_home = ~lost & (near_home < 1.0) & (near_away > 4.0)
-    clear_away = ~lost & (near_away < 1.0) & (near_home > 4.0)
+    slow = ev.ball_speed(filled) < 3.0
+    clear_home = ~lost & slow & (near_home < 1.0) & (near_away > 4.0)
+    clear_away = ~lost & slow & (near_away < 1.0) & (near_home > 4.0)
     assert clear_home.sum() > 200 and clear_away.sum() > 200
     assert (e[clear_home] > 0).mean() > 0.97
     assert (e[clear_away] < 0).mean() > 0.97
@@ -94,6 +102,18 @@ def test_reach_runner_beats_a_nearer_player_standing_still():
     tr = Tracking(ball, np.stack([home, away], axis=1), np.array([0, 1]))
     mid = n // 2
     assert ev.evidence(tr)[mid] < 0 < ev.evidence_reach(tr)[mid]
+
+
+def test_reach_keeps_the_ball_with_a_dribbler():
+    # Home dribbles at 5 m/s with the ball 0.5 m ahead; an away defender stands 2 m to the side.
+    # With a still ball the dribbler would be projected 3.5 m past it and lose it to the defender.
+    n = 50
+    t = np.arange(n) / 25
+    home = np.column_stack([30.0 + 5.0 * t, np.full(n, 30.0)])
+    ball = home + [0.5, 0.0]
+    away = np.tile([32.0 + 5.0 * t[n // 2], 32.0], (n, 1))
+    tr = Tracking(ball, np.stack([home, away], axis=1), np.array([0, 1]))
+    assert (ev.evidence_reach(tr)[10:40] > 0).all()
 
 
 def test_reach_ignores_slot_order_and_duplicates(syn):
@@ -264,3 +284,199 @@ def test_smooth_nan_ignores_and_keeps_missing():
     out = ev._smooth_nan(x, 3)[:, 0]
     np.testing.assert_allclose(out[[0, 1, 2, 4]], [1.5, 2.0, 2.5, 5.0])
     assert np.isnan(out[3])
+
+
+# -- calibrated evidence ----------------------------------------------------------------------
+
+def test_calibrated_contract(syn):
+    e = ev.evidence_calibrated(syn.tracking)
+    _, lost = ball_clean(syn.tracking.ball)
+    assert np.isfinite(e).all() and (np.abs(e) <= 1).all() and (e[lost] == 0).all()
+    tr = syn.tracking
+    flipped = Tracking(tr.ball, tr.players, (1 - tr.team).astype(tr.team.dtype))
+    np.testing.assert_array_equal(ev.evidence_calibrated(flipped), -e)
+    assert (ev.evidence_calibrated(static_scene([11, 10], [10, 10], [20, 10])) > 0).all()
+
+
+def test_calibrated_logit_never_favours_the_slower_team():
+    lead = np.array([2.0, -2.0, 1.0])
+    out = ev.calibrated_logit(lead, np.array([9.0, 9.0, 0.5]), np.array([30.0, 30.0, 0.0]), (1.0, -1.0, -1.0))
+    assert (np.sign(out) * np.sign(lead) >= 0).all()  # the multiplier is clipped at 0
+
+
+def test_ball_speed():
+    n = 30
+    ball = np.column_stack([np.arange(n) * 10.0 / 25, np.zeros(n)])  # 10 m/s
+    np.testing.assert_allclose(ev.ball_speed(ball), 10.0)
+
+
+# -- Metrica open games: labels, readers, ball mask (hand-built files only) ----------------------
+
+def E(team, kind, start, end=None, sub=(), period=1):
+    return mg.Event(team, kind, frozenset(sub), start, start if end is None else end, period)
+
+
+def test_labels_from_events():
+    events = [
+        E(0, "SET PIECE", 10, sub=["KICK OFF"]), E(0, "PASS", 10, 20),
+        E(1, "RECOVERY", 30), E(1, "BALL OUT", 30, 50),  # away clears it out at 50
+        E(1, "CARD", 60, 61),  # booked while dead: does not move the dead-ball start
+        E(0, "SET PIECE", 80, sub=["THROW IN"]), E(0, "PASS", 80, 90),
+        E(0, "SHOT", 100, 110, sub=["ON TARGET", "GOAL"]),
+        E(1, "CARRY", 120, 125),  # someone fetches the ball from the net
+        E(1, "SET PIECE", 150, sub=["KICK OFF"]), E(1, "PASS", 150, 160),
+        E(0, "FAULT RECEIVED", 165), E(0, "RECOVERY", 166),  # advantage: no restart, no D
+        E(0, "BALL OUT", 170, 175), E(1, "RECOVERY", 190), E(1, "PASS", 190, 195, sub=["GOAL KICK"]),
+        E(1, "BALL LOST", 196, 200, sub=["END HALF"]),
+        E(0, "SET PIECE", 300, sub=["KICK OFF"], period=2), E(0, "PASS", 300, 320, period=2),
+    ]
+    lab = mg.labels_from_events(events, 400)
+    expect = np.full(400, "X", dtype="<U1")
+    expect[10:30], expect[30:50], expect[50:80] = "H", "A", "D"
+    expect[80:110], expect[110:150] = "H", "D"  # from the goal to the kick-off, carry or not
+    expect[150:166], expect[166:175], expect[175:190], expect[190:201] = "A", "H", "D", "A"
+    expect[300:321] = "H"
+    np.testing.assert_array_equal(lab, expect)
+
+
+def test_contact_frames():
+    events = [E(0, "PASS", 10, 20), E(1, "RECOVERY", 30), E(1, "PASS", 30, 60), E(0, "SHOT", 80, 90)]
+    np.testing.assert_array_equal(mg.contact_frames(events), [20, 30, 60])
+
+
+def test_mask_ball_is_seeded_and_shaped_like_our_match():
+    contacts = np.arange(100, 199_000, 500)
+    a, b = mg.mask_ball(199_319, contacts, seed=1), mg.mask_ball(199_319, contacts, seed=1)
+    np.testing.assert_array_equal(a, b)
+    assert not np.array_equal(a, mg.mask_ball(199_319, contacts, seed=2))
+    assert 0.3 < a.mean() < 0.5
+
+
+def _write_metrica_csv(path, team_name, xy, period):
+    """Metrica's CSV layout: two label rows, a header, then Period, Frame, Time and x, y pairs."""
+    n, k = xy.shape[0], xy.shape[1] - 1
+    names = [f"Player{i + 1}" for i in range(k)] + ["Ball"]
+    lines = [",,," + "".join(f"{team_name},," for _ in range(k)) + ",",
+             ",,," + "".join(f"{i + 1},," for i in range(k)) + ",",
+             "Period,Frame,Time [s]," + ",".join(f"{nm}," for nm in names)]
+    for f in range(n):
+        vals = ",".join("NaN" if np.isnan(v) else f"{v:.5f}" for v in xy[f].ravel())
+        lines.append(f"{period[f]},{f + 1},{(f + 1) / 25:.2f},{vals}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_read_csv_tracking(tmp_path):
+    n = 30
+    period = np.r_[np.ones(12, int), np.full(18, 2)]
+    home = np.full((n, 3, 2), 0.25)
+    home[:, 2] = [0.5, 0.5]  # the ball
+    home[5, 1] = np.nan
+    away = np.full((n, 3, 2), 0.75)
+    away[:, 2] = [0.5, 0.5]
+    _write_metrica_csv(tmp_path / "h.csv", "Home", home, period)
+    _write_metrica_csv(tmp_path / "a.csv", "Away", away, period)
+    tr, halves = mg.read_csv_tracking(tmp_path / "h.csv", tmp_path / "a.csv")
+    assert tr.players.shape == (n, 4, 2) and tr.team.tolist() == [0, 0, 1, 1]
+    np.testing.assert_allclose(tr.ball[0], [52.5, 34.0])
+    np.testing.assert_allclose(tr.players[0, 0], [0.25 * 105, 0.25 * 68])
+    assert np.isnan(tr.players[5, 1]).all()
+    assert halves == ((0, 11), (12, 29))
+
+
+def test_read_events_csv_and_json(tmp_path):
+    (tmp_path / "e.csv").write_text(
+        "Team,Type,Subtype,Period,Start Frame,Start Time [s],End Frame,End Time [s],From,To,Start X,Start Y,End X,End Y\n"
+        "Away,SET PIECE,KICK OFF,1,1,0.04,0,0,P1,,NaN,NaN,NaN,NaN\n"
+        "Home,SHOT,ON TARGET-GOAL,2,50,2.0,60,2.4,P2,,0.9,0.5,1.0,0.5\n", encoding="utf-8")
+    a, b = mg.read_csv_events(tmp_path / "e.csv")
+    assert a == mg.Event(1, "SET PIECE", frozenset({"KICK OFF"}), 0, 0, 1)
+    assert b == mg.Event(0, "SHOT", frozenset({"ON TARGET", "GOAL"}), 49, 59, 2)
+    data = {"data": [
+        {"team": {"id": "T1"}, "type": {"name": "PASS"}, "subtypes": None, "start": {"frame": 10}, "end": {"frame": 20}, "period": 1},
+        {"team": {"id": "T2"}, "type": {"name": "SHOT"}, "subtypes": [{"name": "ON TARGET"}, {"name": "GOAL"}],
+         "start": {"frame": 30}, "end": {"frame": None}, "period": 2},
+    ]}
+    (tmp_path / "e.json").write_text(json.dumps(data), encoding="utf-8")
+    c, d = mg.read_json_events(tmp_path / "e.json", home_id="T1")
+    assert c == mg.Event(0, "PASS", frozenset(), 9, 19, 1)
+    assert d == mg.Event(1, "SHOT", frozenset({"ON TARGET", "GOAL"}), 29, 29, 2)
+
+
+# -- decoder and leave-one-game-out (synthetic only) -------------------------------------------
+
+def test_viterbi_is_the_exact_optimum():
+    rng = np.random.default_rng(0)
+    for _ in range(200):
+        n = int(rng.integers(1, 9))
+        e = rng.normal(size=n) * rng.choice([0.1, 1.0, 3.0])
+        cost = float(rng.choice([0.1, 1.0, 4.0]))
+
+        def score(s):
+            return float(np.dot(s, e)) - cost * int(np.count_nonzero(np.diff(s)))
+
+        best = max(score(np.array(s)) for s in itertools.product((1.0, -1.0), repeat=n))
+        path = fit.viterbi(e, cost)
+        assert score(np.where(path == 0, 1.0, -1.0)) == pytest.approx(best)
+
+
+def test_decode_keeps_dead_ball_and_switches_on_evidence():
+    gt = np.array([3] * 5 + [0] * 50 + [2] * 10 + [1] * 50 + [3] * 5, dtype=np.int8)
+    e = np.r_[np.zeros(5), np.ones(50), np.zeros(10), -np.ones(50), np.zeros(5)]
+    pred = fit.decode(e, gt, [(5, 115)], cost=8.0)
+    np.testing.assert_array_equal(pred[5:115], gt[5:115])
+    assert (pred[:5] == 3).all() and (pred[115:] == 3).all()
+
+
+def synthetic_game(number, n=6_000):
+    syn = make_synthetic(n, seed=number)
+    contacts = np.array([f for f, _ in syn.receptions], dtype=np.int64)
+    return mg.OpenGame(number, syn.tracking, ((0, n - 1),), syn.labels, contacts)
+
+
+def test_perfect_evidence_scores_one():
+    d = fit.prepare(synthetic_game(1), seed=0)
+    truth = np.where(d.gt == 0, 1.0, np.where(d.gt == 1, -1.0, 0.0))
+    assert fit.spell_f1(d, fit.decode(truth, d.gt, d.runs, cost=4.0)) == 1.0
+
+
+def test_calibration_is_deterministic_and_favours_the_faster_team():
+    data = [fit.prepare(synthetic_game(k), seed=k) for k in (1, 2)]
+    cal = fit.fit_calibration(data)
+    assert cal == fit.fit_calibration([fit.prepare(synthetic_game(k), seed=k) for k in (1, 2)])
+    assert cal.nearest_platt > 0 and cal.reach_platt[0] > 0
+    assert np.isfinite(cal.reach_context).all() and np.isfinite(cal.shape_k)
+
+
+def test_scores_come_from_the_official_scorer_file():
+    import sys
+    from pathlib import Path
+
+    official = Path(__file__).resolve().parents[1] / "evaluation" / "possession_metrics.py"
+    assert Path(fit.pm.__file__).resolve() == official
+    assert str(official.parent) not in sys.path  # imported by path, nothing on sys.path to shadow it
+
+
+def test_cache_with_pickled_objects_is_refused(tmp_path):
+    # np.load would otherwise unpickle (run) whatever a planted cache holds
+    np.savez(tmp_path / "metrica_game1.npz", ball=np.array([object()], dtype=object),
+             players=np.zeros((1, 1, 2)), team=np.zeros(1, dtype=np.int8), halves=np.zeros((1, 2), dtype=np.int64))
+    with pytest.raises(ValueError):
+        mg._cached_tracking(1, tmp_path, tmp_path)
+
+
+def test_evidence_to_logit_inverts_and_stays_finite():
+    e = np.array([-1.0, -0.5, 0.0, 0.3, 1.0])
+    logit = ev.evidence_to_logit(e)
+    assert np.isfinite(logit).all()
+    np.testing.assert_allclose(ev.logit_to_evidence(logit)[1:4], e[1:4])
+    np.testing.assert_array_equal(ev.evidence_to_logit(-e), -logit)
+
+
+def test_leave_one_game_out_runs_on_synthetic_games():
+    data = [fit.prepare(synthetic_game(k, n=4_000), seed=k) for k in (1, 2, 3)]
+    results = fit.leave_one_game_out(data, log=lambda *_: None)
+    assert set(results) == set(fit.CANDIDATES)
+    for r in results.values():
+        assert set(r["held_out"]) == {1, 2, 3}
+        assert all(0.0 <= v <= 1.0 for v in r["held_out"].values())
+    assert fit.choose(results, fit.BASES) in fit.BASES
