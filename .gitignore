@@ -94,3 +94,7 @@ notes/
 .ipynb_checkpoints/
 __pycache__/
 .env
+
+# Personal Claude Code settings and guard hook: local to each machine, never committed.
+.claude/settings.local.json
+.claude/hooks/

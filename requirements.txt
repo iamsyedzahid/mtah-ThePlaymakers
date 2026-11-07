@@ -1,10 +1,7 @@
-# Everything the evaluation needs. Deliberately two lines.
-#
-# The scorer is dependency-light on purpose: no sklearn, no torch, nothing that pins a Python
-# version. It runs under 3.8 and 3.11 alike and produces identical output, so "it scored
-# differently on my machine" is not a conversation anyone has to have.
-#
-# Optional tooling -- the ATD loader and anything that opens the video -- lives in
-# requirements-starter.txt.
-numpy
-pandas
+# Pinned, because SUBMISSION.md asks for pinned dependencies and the same file every run.
+# Verified to install on Python 3.15. requirements-starter.txt includes this file.
+numpy==2.5.4
+scipy==1.18.1
+pandas==3.1.0
+pytest==9.1.1
+kloppy==3.18.0  # reads the ATD (mtah/io_atd.py via starter/load_atd.py); same pin as the starter

@@ -1,0 +1,36 @@
+# Who reviews what. The last matching pattern wins.
+#
+# The handles below are placeholders: replace @ThePlaymakers/rN with real GitHub users or teams.
+#
+#   R1  Data & Ball        io_atd, teams, ball, config. Wraps or reuses games.py and
+#                          starter/load_atd.py. Metres, 0-indexed frames, home/away mapping, ball
+#                          cleaning, lost_mask, gap stats (numbers only).
+#   R2  Evidence           evidence
+#   R3  Touches & tagging  touches, tagging
+#   R4  Segmentation       segment, deadball, xpolicy
+#   R5  Tooling & docs     scripts, tests, run.py, docs
+
+*.md                    @ThePlaymakers/r5
+
+/mtah/__init__.py       @ThePlaymakers/r1
+/mtah/io_atd.py         @ThePlaymakers/r1
+/mtah/teams.py          @ThePlaymakers/r1
+/mtah/ball.py           @ThePlaymakers/r1
+/mtah/config.py         @ThePlaymakers/r1
+
+/mtah/evidence.py       @ThePlaymakers/r2
+
+/mtah/touches.py        @ThePlaymakers/r3
+/mtah/tagging.py        @ThePlaymakers/r3
+
+/mtah/segment.py        @ThePlaymakers/r4
+/mtah/deadball.py       @ThePlaymakers/r4
+/mtah/xpolicy.py        @ThePlaymakers/r4
+
+/mtah/synthetic.py      @ThePlaymakers/r5
+/scripts/               @ThePlaymakers/r5
+/tests/                 @ThePlaymakers/r5
+/run.py                 @ThePlaymakers/r5
+
+# The shared contract: every role is notified of a change to it.
+/mtah/interfaces.py     @ThePlaymakers/r1 @ThePlaymakers/r2 @ThePlaymakers/r3 @ThePlaymakers/r4 @ThePlaymakers/r5
