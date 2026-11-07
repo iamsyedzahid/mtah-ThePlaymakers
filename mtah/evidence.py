@@ -25,9 +25,10 @@ evidence_calibrated, evidence_shape_calibrated: the two above with the calibrati
 
 evidence: the nearest player's team, weighted by exp(-distance / SIGMA_M). Chosen by
     leave-one-game-out spellF1 on Metrica's open games, ball masked and displaced like ours
-    (python -m mtah.evidence_fit): nearest 0.43-0.45, best reach variant 0.39, calibrating either
-    a tie. R4 should add evidence_shape_calibrated on lost frames, where evidence() is 0: nearest
-    plus shape scores 0.53-0.54, +0.08 to +0.10, better on every game with both ball masks.
+    (python -m mtah.evidence_fit), two sets of masks: nearest 0.40-0.42, best reach variant 0.39
+    (a tie, so the simpler one stays), calibrating either a tie. R4 should add
+    evidence_shape_calibrated on lost frames, where evidence() is 0: nearest plus shape scores
+    0.50-0.51, +0.07 to +0.11, better on every game with both masks.
 """
 import math
 from typing import NamedTuple, Sequence
@@ -75,8 +76,8 @@ FIT_DECIMALS = 6  # fitted weights are rounded, so last-bit BLAS differences can
 # offset 0; rerun the command above to regenerate them. The nearest-player evidence is left as it
 # is: its fitted Platt slope is 0.97 on Metrica's own ball and 1.24 on the displaced one, and
 # calibrating it ties on spellF1 either way.
-REACH_CALIBRATION = (1.623518, 0.0, 0.0)
-SHAPE_TEMPERATURE = 0.707065
+REACH_CALIBRATION = (1.649462, 0.0, 0.0)
+SHAPE_TEMPERATURE = 0.643759
 BALL_VEL_HALF_FRAMES = 3  # ball velocity from a central difference over 6 frames (0.24 s)
 
 

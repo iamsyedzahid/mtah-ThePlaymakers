@@ -16,12 +16,13 @@ Labels come from Metrica's event data, the same way for all three games:
 - X: before a half's first event and after its last.
 
 The ball is almost never missing in these games, unlike ours (41% of graded frames). mask_ball
-hides it the way R1 measured our match losing it (mtah/synthetic.py): about 41% of frames in gaps
-of exponential length with mean 430 frames, many starting just before a player takes the ball.
+hides it the way R1 measured our match losing it: 40.8% of frames, in gaps with our quartiles
+(6.1 / 10.7 / 21.1 s), many starting just before a player takes the ball.
 And their corrected ball sits on its carrier, while ours is detected metres off the players:
 displace_ball moves it off as R1 measured ours (masked_tracking(..., displace=True)).
 """
 import json
+import math
 from pathlib import Path
 from typing import Iterable, NamedTuple, Sequence
 
@@ -30,7 +31,7 @@ import numpy as np
 from mtah.config import FPS
 from mtah.interfaces import (A, D, H, HOME, AWAY, LABEL_DTYPE, X, BoolArray, FloatArray, Interval, IntArray,
                              LabelArray, Tracking)
-from mtah.synthetic import BALL_LOST_FRAC, CROWD_GAP_PROB, DRIBBLE_RANGE_M, MEAN_GAP_FRAMES
+from mtah.synthetic import CROWD_GAP_PROB, DRIBBLE_RANGE_M
 
 REPO = Path(__file__).resolve().parents[1]
 METRICA_DIR = REPO / "outputs" / "metrica" / "sample" / "data"
@@ -39,6 +40,19 @@ METRICA_PITCH_M = (105.0, 68.0)  # README: 105 x 68 m for games 1-2; game 3's me
 GAMES = (1, 2, 3)
 
 DISPLACE_STREAM = 7  # displace_ball's random stream, apart from mask_ball's for the same seed
+# A new ball offset every 3 s, blended linearly in between. Faster, the offset itself moves the
+# ball: with 1 s knots a ball at rest drifts at about 2 m/s and the slow-ball share (Savitzky-Golay
+# speed under 2 m/s) falls from 0.17-0.22 to 0.12-0.15; with 3 s it stays at 0.16-0.22.
+DISPLACE_KNOT_FRAMES = 3 * FPS
+
+# Our match's ball gaps, R1's measurement over the graded halves: 150 gaps; p25 6.1 s, p50 10.7 s,
+# p75 21.1 s (p90 33.8 s, longest 221.5 s); 40.8% of graded frames lost after cleaning. The
+# lognormal through the quartiles gives p90 34.8 s and a mean of 16.3 s.
+GAP_QUARTILES_S = (6.1, 10.7, 21.1)
+LOST_FRAC = 0.408
+GAP_LOG_MU = math.log(GAP_QUARTILES_S[1] * FPS)  # in frames
+GAP_LOG_SIGMA = (math.log(GAP_QUARTILES_S[2]) - math.log(GAP_QUARTILES_S[0])) / (2 * 0.6744897501960817)
+GAP_MEAN_FRAMES = math.exp(GAP_LOG_MU + GAP_LOG_SIGMA**2 / 2)
 
 POSSESSION_EVENTS = frozenset({"PASS", "CARRY", "RECOVERY", "SHOT", "SET PIECE", "BALL LOST"})
 NOT_LIVE = frozenset({"CARD"})  # booked while the ball is dead, so its frames say nothing about play
@@ -123,10 +137,12 @@ def contact_frames(events: Sequence[Event]) -> IntArray:
 # -- the ball as our match loses it ------------------------------------------------------------
 
 def mask_ball(n_frames: int, contacts: IntArray, seed: int) -> BoolArray:
-    """[T] True where the ball is hidden: R1's gap model for our match (mtah/synthetic.py), with
-    the contacts of this game as the crowded moments that gaps are moved to."""
+    """[T] True where the ball is hidden, in gaps shaped like our match's (GAP_QUARTILES_S): a
+    lognormal through R1's measured quartiles, LOST_FRAC of frames in all. Like R1's synthetic
+    match, gaps are often moved to start just before a contact (CROWD_GAP_PROB), where play is
+    crowded and the real ball is lost most."""
     rng = np.random.default_rng(seed)
-    mean_seen = MEAN_GAP_FRAMES * (1 - BALL_LOST_FRAC) / BALL_LOST_FRAC
+    mean_seen = GAP_MEAN_FRAMES * (1 - LOST_FRAC) / LOST_FRAC
     contacts = np.asarray(contacts, dtype=np.int64)
     hidden = np.zeros(n_frames, dtype=bool)
     f = int(rng.exponential(mean_seen))
@@ -135,7 +151,7 @@ def mask_ball(n_frames: int, contacts: IntArray, seed: int) -> BoolArray:
             j = np.searchsorted(contacts, f)
             if j < contacts.size and contacts[j] - f < 5 * FPS:
                 f = max(f, int(contacts[j]) - int(rng.integers(0, FPS)))
-        length = max(1, int(np.ceil(rng.exponential(MEAN_GAP_FRAMES))))
+        length = max(1, int(np.ceil(rng.lognormal(GAP_LOG_MU, GAP_LOG_SIGMA))))
         hidden[f : f + length] = True
         f += length + max(1, int(np.ceil(rng.exponential(mean_seen))))
     return hidden
@@ -157,13 +173,14 @@ def displace_ball(n_frames: int, seed: int) -> FloatArray:
     Metrica's corrected ball sits on its carrier: with a slow ball the nearest player is a median
     0.07-0.11 m away, 82-95% within 1 m. Ours is detected apart from the players: R1 measured a
     median 1.2 m and 44% within 1 m, and modelled it as the ball running DRIBBLE_RANGE_M from its
-    carrier's tracked position (mtah/synthetic.py). Here every second gets an offset of that size
-    in a random direction, blended linearly between seconds; the open games then give 1.14-1.21 m
-    and 39-42%. No per-frame jitter: it would add flicker that neither data set has. A separate
-    random stream from mask_ball's for the same seed.
+    carrier's tracked position (mtah/synthetic.py). Here every DISPLACE_KNOT_FRAMES gets an offset
+    of that size in a random direction, blended linearly in between; with R1's definition (slow =
+    Savitzky-Golay speed under 2 m/s) the open games then give 1.10-1.18 m and 39-45%. No per-frame
+    jitter: it would add flicker that neither data set has. A separate random stream from
+    mask_ball's for the same seed.
     """
     rng = np.random.default_rng([seed, DISPLACE_STREAM])
-    knots = np.arange(0, n_frames + FPS, FPS)
+    knots = np.arange(0, n_frames + DISPLACE_KNOT_FRAMES, DISPLACE_KNOT_FRAMES)
     radius = rng.uniform(*DRIBBLE_RANGE_M, size=knots.size)
     angle = rng.uniform(0.0, 2 * np.pi, size=knots.size)
     frames = np.arange(n_frames)

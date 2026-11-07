@@ -50,7 +50,7 @@ pm = _official_scorer()
 
 NOISE = pm.SPELL_NOISE_BAND  # 0.04: smaller differences are ties
 COSTS = (4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0)  # switch cost, in frames of full evidence
-SHAPE_WEIGHTS = (0.25, 0.5, 1.0, 2.0, 4.0)
+SHAPE_WEIGHTS = (0.5, 1.0, 2.0, 4.0, 8.0, 16.0)
 STRIDE = 5  # calibration uses every 5th frame: neighbours 40 ms apart carry the same information
 CALIBRATION_RIDGE = 1.0
 BASES = ("nearest", "nearest_platt", "reach", "reach_platt", "reach_context")  # simplest first

@@ -350,6 +350,14 @@ def test_mask_ball_is_seeded_and_shaped_like_our_match():
     np.testing.assert_array_equal(a, b)
     assert not np.array_equal(a, mg.mask_ball(199_319, contacts, seed=2))
     assert 0.3 < a.mean() < 0.5
+    # over many gaps: the lost share and the gap quartiles R1 measured on our match
+    from mtah.ball import _gaps
+
+    long = mg.mask_ball(2_000_000, np.arange(100, 2_000_000, 500), seed=3)
+    starts, ends = _gaps(long)
+    quartiles = np.percentile((ends - starts) / 25, [25, 50, 75])
+    np.testing.assert_allclose(quartiles, mg.GAP_QUARTILES_S, rtol=0.12)
+    assert abs(long.mean() - mg.LOST_FRAC) < 0.02
 
 
 def test_displace_ball_is_seeded_and_sized_like_our_ball():
@@ -360,10 +368,13 @@ def test_displace_ball_is_seeded_and_sized_like_our_ball():
     assert not np.array_equal(a, mg.displace_ball(10_000, seed=2))
     size = np.linalg.norm(a, axis=1)
     lo, hi = DRIBBLE_RANGE_M
+    k = mg.DISPLACE_KNOT_FRAMES
     assert size.max() <= hi + 1e-9  # blending two offsets never makes a longer one
-    knots = size[::25]
+    knots = size[::k]
     assert knots.min() >= lo - 1e-9 and np.median(knots) > 1.0
-    assert np.abs(np.diff(a, axis=0)).max() < 2 * hi / 25 + 1e-9  # smooth: no per-frame jumps
+    # slow: between knots the offset moves the ball by at most 2 * hi per knot interval
+    assert np.abs(np.diff(a, axis=0)).max() <= 2 * hi / k + 1e-9
+    assert 2 * hi / k * 25 < 2.0  # under 2 m/s, so a ball at rest still counts as slow
 
 
 def test_masked_tracking_displaces_only_the_seen_ball():
