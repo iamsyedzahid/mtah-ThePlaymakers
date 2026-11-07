@@ -517,3 +517,98 @@ def test_leave_one_game_out_runs_on_synthetic_games(monkeypatch):
         assert set(r["held_out"]) == {1, 2, 3}
         assert all(0.0 <= v <= 1.0 for v in r["held_out"].values())
     assert fit.choose(results, fit.BASES) in fit.BASES
+
+
+# -- fusion_features, for mtah/fusion.py (synthetic only) --------------------------------------
+
+from mtah import r2_features as rf  # noqa: E402
+from mtah.config import PITCH_M  # noqa: E402
+
+TWO_HALVES = [(0, 10_000), (10_000, 20_000)]  # half-open, as fusion passes them
+
+
+def test_fusion_features_shape_names_and_finite(big):
+    tr = big.tracking
+    X, names = rf.fusion_features(tr.ball, tr.players, tr.team, PITCH_M, TWO_HALVES)
+    assert X.shape == (tr.n_frames, len(names)) and X.dtype == np.float64
+    assert names == list(rf.FEATURE_NAMES) and len(set(names)) == len(names)
+    assert np.isfinite(X).all()  # no NaN and no infinity, ever
+    assert (X != 0).any(axis=0).all()  # every column says something
+
+
+def test_fusion_features_flip_exactly_with_the_teams(big):
+    tr = big.tracking
+    X, _ = rf.fusion_features(tr.ball, tr.players, tr.team, PITCH_M, TWO_HALVES)
+    swapped, _ = rf.fusion_features(tr.ball, tr.players, 1 - tr.team, PITCH_M, TWO_HALVES)
+    np.testing.assert_array_equal(swapped, -X)
+
+
+def test_fusion_features_are_the_evidence_functions(big):
+    tr = big.tracking
+    X, names = rf.fusion_features(tr.ball, tr.players, tr.team, PITCH_M, [(0, tr.n_frames)])
+    col = dict(zip(names, X.T))
+    _, lost = ball_clean(tr.ball)
+    np.testing.assert_array_equal(col["r2_nearest"], ev.evidence(tr))
+    np.testing.assert_array_equal(ev.logit_to_evidence(col["r2_reach_lead"] / ev.CONTROL_SCALE_S), ev.evidence_reach(tr))
+    np.testing.assert_allclose(ev.logit_to_evidence(col["r2_shape_lost"]), ev.evidence_shape(tr), atol=1e-8)
+    assert (col["r2_shape_lost"][~lost] == 0).all() and (col["r2_shape"][~lost] != 0).any()
+    np.testing.assert_array_equal(col["r2_shape"][lost], col["r2_shape_lost"][lost])
+    assert (np.abs(col["r2_shape"]) <= rf.SHAPE_LOGIT_CAP).all()
+
+
+def test_fusion_features_fit_each_half_on_its_own(big):
+    tr = big.tracking
+    X, _ = rf.fusion_features(tr.ball, tr.players, tr.team, PITCH_M, TWO_HALVES)
+    players = tr.players.copy()
+    players[10_100:, :, 1] += 1.0  # the second half changes, past the velocities' 12-frame reach
+    Y, _ = rf.fusion_features(tr.ball, players, tr.team, PITCH_M, TWO_HALVES)
+    np.testing.assert_array_equal(Y[:10_000], X[:10_000])
+    assert not np.array_equal(Y[10_000:], X[10_000:])
+
+
+def test_fusion_features_shape_only_inside_halves(big):
+    tr = big.tracking
+    X, names = rf.fusion_features(tr.ball, tr.players, tr.team, PITCH_M, [(1_000, 9_000), (11_000, 19_000)])
+    col = dict(zip(names, X.T))
+    outside = np.ones(tr.n_frames, dtype=bool)
+    outside[1_000:9_000] = outside[11_000:19_000] = False
+    assert (col["r2_shape"][outside] == 0).all() and (col["r2_shape_lost"][outside] == 0).all()
+    assert (col["r2_shape"][~outside] != 0).any()
+
+
+def test_fusion_features_treat_infinite_positions_as_missing(syn):
+    tr = syn.tracking
+    ball, players = tr.ball.copy(), tr.players.copy()
+    ball[100:110] = np.inf
+    players[200:300, :5] = -np.inf
+    X, _ = rf.fusion_features(ball, players, tr.team, PITCH_M, [(0, tr.n_frames)])
+    ball[100:110] = np.nan
+    players[200:300, :5] = np.nan
+    np.testing.assert_array_equal(X, rf.fusion_features(ball, players, tr.team, PITCH_M, [(0, tr.n_frames)])[0])
+    assert np.isfinite(X).all()
+
+
+def test_fusion_features_without_a_ball_say_nothing(syn):
+    tr = syn.tracking
+    X, _ = rf.fusion_features(np.full_like(tr.ball, np.nan), tr.players, tr.team, PITCH_M, [(0, tr.n_frames)])
+    assert np.isfinite(X).all() and (X == 0).all()
+
+
+@pytest.mark.parametrize("halves", [[], [(0, 0)], [(-1, 100)], [(0, 3_001)], [(0, 2_000), (1_500, 3_000)],
+                                    [(2_000, 3_000), (0, 1_000)]],
+                         ids=["none", "empty", "negative", "past_the_end", "overlap", "out_of_order"])
+def test_fusion_features_refuse_bad_halves(syn, halves):
+    tr = syn.tracking
+    with pytest.raises(ValueError):
+        rf.fusion_features(tr.ball, tr.players, tr.team, PITCH_M, halves)
+
+
+def test_fusion_features_refuse_centre_origin_and_bad_pitch(syn):
+    tr = syn.tracking
+    centre = np.array(PITCH_M) / 2
+    with pytest.raises(ValueError, match="corner-origin"):
+        rf.fusion_features(tr.ball - centre, tr.players - centre, tr.team, PITCH_M, [(0, tr.n_frames)])
+    with pytest.raises(ValueError, match="pitch"):
+        rf.fusion_features(tr.ball, tr.players, tr.team, (0.0, 68.0), [(0, tr.n_frames)])
+    with pytest.raises(ValueError):  # shapes are checked as for a Tracking
+        rf.fusion_features(tr.ball[:-1], tr.players, tr.team, PITCH_M, [(0, 100)])

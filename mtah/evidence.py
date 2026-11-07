@@ -28,7 +28,8 @@ evidence: the nearest player's team, weighted by exp(-distance / SIGMA_M). Chose
     (python -m mtah.evidence_fit), two sets of masks: nearest 0.40-0.42, best reach variant 0.39
     (a tie, so the simpler one stays), calibrating either a tie. R4 should add
     evidence_shape_calibrated on lost frames, where evidence() is 0: nearest plus shape scores
-    0.50-0.51, +0.07 to +0.11, better on every game with both masks.
+    0.49-0.51, +0.07 to +0.11, better on every game with both masks. For mtah/fusion.py the same
+    pieces come as per-frame features from mtah/r2_features.py.
 """
 import math
 from typing import NamedTuple, Sequence
@@ -77,7 +78,7 @@ FIT_DECIMALS = 6  # fitted weights are rounded, so last-bit BLAS differences can
 # is: its fitted Platt slope is 0.97 on Metrica's own ball and 1.24 on the displaced one, and
 # calibrating it ties on spellF1 either way.
 REACH_CALIBRATION = (1.649462, 0.0, 0.0)
-SHAPE_TEMPERATURE = 0.643759
+SHAPE_TEMPERATURE = 0.645468
 BALL_VEL_HALF_FRAMES = 3  # ball velocity from a central difference over 6 frames (0.24 s)
 
 
@@ -293,16 +294,17 @@ def halves_for(n_frames: int) -> tuple[Interval, ...]:
     return ((0, n_frames - 1),)
 
 
-def shape_features(scan: Scan, first: int, last: int, direction: int) -> FloatArray:
+def shape_features(scan: Scan, first: int, last: int, direction: int, length: float = PITCH_M[0]) -> FloatArray:
     """[n, F] smoothed home-minus-away shape features for frames first..last (inclusive).
 
     Each is positive when home looks like the team with the ball: the block is in home's
     attacking half, home is wider and longer, home's defensive line is higher up (and away's
     deeper), everyone runs towards away's goal, home runs more. Swapping the teams negates every
-    feature exactly, because the attacking direction swaps with them.
+    feature exactly, because the attacking direction swaps with them. `length` is the pitch
+    length in metres, with x measured from one goal line (the corner origin of interfaces.py).
     """
     sl = slice(first, last + 1)
-    d, length = float(direction), PITCH_M[0]
+    d = float(direction)
     own, other = (0, 1) if direction > 0 else (1, 0)  # which line column is each team's own goal side
     raw = np.column_stack([
         d * (scan.mean[sl, HOME, 0] + scan.mean[sl, AWAY, 0] - length),
@@ -332,16 +334,18 @@ def clear_contacts(scan: Scan, lost: BoolArray) -> FloatArray:
     return home.astype(float) - away.astype(float)
 
 
-def shape_logits(scan: Scan, lost: BoolArray, halves: Sequence[Interval]) -> tuple[FloatArray, list[ShapeModel]]:
+def shape_logits(scan: Scan, lost: BoolArray, halves: Sequence[Interval], everywhere: bool = False,
+                 length: float = PITCH_M[0]) -> tuple[FloatArray, list[ShapeModel]]:
     """([T] logit of p_home, one model per half). Each half's model is trained on that half's own
-    clear contacts only. The logit is set on lost frames inside halves that have a model and is
-    exactly 0 everywhere else."""
+    clear contacts only. The logit is set inside halves that have a model, on lost frames only
+    (or on every frame with shape features, if everywhere), and is exactly 0 everywhere else.
+    halves are inclusive (first, last) pairs; length is the pitch length (shape_features)."""
     labels = clear_contacts(scan, lost)
     logit = np.zeros(lost.shape[0])
     models = []
     for first, last in halves:
         direction = attack_direction(scan, first, last)
-        x = shape_features(scan, first, last, direction)  # computed once: fit, then predict
+        x = shape_features(scan, first, last, direction, length)  # computed once: fit, then predict
         finite = np.isfinite(x).all(axis=1)
         y = labels[first : last + 1]
         use = (y != 0) & finite
@@ -351,7 +355,7 @@ def shape_logits(scan: Scan, lost: BoolArray, halves: Sequence[Interval]) -> tup
             scale = np.sqrt(np.mean(x[use] ** 2, axis=0))
             scale = np.array([float(f"{s:.6g}") if s > 0 else 1.0 for s in scale])
             weights = np.round(fit_logistic(y[use, None] * x[use] / scale, SHAPE_RIDGE), FIT_DECIMALS)
-            on = lost[first : last + 1] & finite
+            on = finite if everywhere else lost[first : last + 1] & finite
             logit[first : last + 1][on] = (x[on] / scale) @ weights
         models.append(ShapeModel(first, last, direction, n_home, n_away, scale, weights))
     return logit, models

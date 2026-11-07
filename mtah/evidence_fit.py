@@ -84,7 +84,7 @@ def prepare(game: mg.OpenGame, seed: int, displace: bool = True) -> Prepared:
     filled, lost = ball_clean(tr.ball)
     scan = ev.scan_teams(filled, tr.players, tr.team)
     lead, best, speed = ev.reach_inputs(scan, lost)
-    shape_logit, _ = ev.shape_logits(scan, lost, game.halves)
+    shape_logit, _ = ev.shape_logits(scan, lost, game.halves, length=mg.METRICA_PITCH_M[0])
     gt = pm.label_codes(game.labels)
     nearest = ev.nearest_evidence(tr.ball, lost, tr.players, tr.team)  # what evidence() computes
     return Prepared(game.number, gt, pm.valid_runs(gt), lost, lead, best, speed, nearest, shape_logit)
