@@ -14,6 +14,7 @@ nothing reads either.
 """
 import argparse
 import hashlib
+import time
 from pathlib import Path
 from typing import Sequence
 
@@ -65,8 +66,21 @@ def predict_real(open_games: str | None = None, dfl_games: str | None = None) ->
     from mtah import dfl, fusion, opengames
     from mtah.io_atd import default_cache, load_tracking
 
+    def step(text):
+        print(f"[{time.strftime('%H:%M:%S')}] {text}", flush=True)
+
     with threadpool_limits(1):
-        model = fusion.train(opengames.training_games(open_games) + dfl.training_games(dfl_games))
+        step("loading Metrica's open games (about a minute)")
+        games = opengames.training_games(open_games)
+        step("checking and loading the DFL open matches (about a minute)")
+        games += dfl.training_games(dfl_games)
+        rows = []
+        for gm in games:
+            step(f"features for {gm['name']}")
+            rows += fusion.training_rows(gm)
+        step(f"training the learned layer on {sum(len(y) for _, y in rows):,} frames (several minutes, one thread)")
+        model = fusion.fit(rows)
+        step("labelling our match")
         tracking = load_tracking(default_cache())
         known_dead = np.zeros(tracking.n_frames, dtype=bool)
         known_dead[SECOND_HALF_D_BLOCK[0] : SECOND_HALF_D_BLOCK[1] + 1] = True
