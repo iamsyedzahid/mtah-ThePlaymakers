@@ -8,14 +8,15 @@ Task: label each of the 199,319 frames of the tactical video H, A or D, ranked o
 
 Per-frame evidence from hand-written rules and from a learned model, combined and decoded into
 possessions by a Viterbi pass. The learned model is trained on **other matches**: Metrica's three open
-sample games, whose event data gives real labels. Those games are also the benchmark every design
-choice was made on, because the public 5 minutes of our match may not be used for tuning, and synthetic
-data cannot show how real players and a real ball behave.
+sample games and seven open Bundesliga matches from the DFL, which together give real labels in two
+styles. Those ten matches are also the benchmark every design choice was made on, because the public 5
+minutes of our match may not be used for tuning, and synthetic data cannot show how real players and a
+real ball behave.
 
 ```
 ATD ----> features ----> rule evidence: team, shape (ball missing), dead ball --+
-            |                                                                    +--> Viterbi per half --> merge short spells --> CSV
-            +----------> learned layer (trained on Metrica's open games) -------+
+            |                                                                    +--> Viterbi per half --> CSV
+            +----------> learned layer (trained on 10 open matches) ------------+
 ```
 
 The pipeline is `mtah/fusion.py`; `run.py --real` runs it.
@@ -33,12 +34,11 @@ The pipeline is `mtah/fusion.py`; `run.py --real` runs it.
    per half, a two-group fit of collective player speed that separates slow phases from fast ones
    without a fixed threshold.
 4. **Learned layer.** A gradient-boosted classifier (scikit-learn) on 32 features: the above, plus
-   averages over windows of about 1, 3 and 8 s around each frame, and the ball's position and motion relative to
-   each team's attacking direction. It is trained with home and away swapped as well, and applied both
-   ways round and averaged, so it cannot favour either team.
+   averages over windows of about 1, 3 and 8 s around each frame, and the ball's position and motion
+   relative to each team's attacking direction. It is trained with home and away swapped as well, and
+   applied both ways round and averaged, so it cannot favour either team.
 5. **Decoding.** One Viterbi pass per half over H, A and D, with a cost for switching team and a higher
-   one for switching to or from D. Then a possession under 2 s between two of the other team's, with no
-   dead ball between, joins them.
+   one for switching to or from D. Short possessions are kept (see "How settings were chosen").
 
 The ideas were pooled from several public forks of the starter repository and rebuilt here with three
 fixes: the published graded halves instead of halves guessed from the tracking, the learned layer seeing
@@ -52,13 +52,21 @@ missing values the same way in training and in use, and the published second-hal
 | Smart Tagging | Not used by the submission. The earlier rule-only pipeline uses its set pieces; see below |
 | Tactical homography | Not used by the submission. The earlier pipeline uses it to tell when the camera is still |
 | Tactical video, broadcast video and ATD | Not used: the broadcast has no mapping to the tactical frames |
-| Metrica open sample games | Training data for the learned layer, and the benchmark (see below) |
+| Metrica open sample games | Training data for the learned layer, and a benchmark |
+| DFL open Bundesliga matches | Training data for the learned layer, and a benchmark |
 
 ## Training data
 
-**Metrica Sports' open sample data**: three anonymised professional matches, other than ours, with
-tracking and event data. Source `https://github.com/metrica-sports/sample-data`, commit
+No data of any kind about our match is labelled or used for training, and no person labelled anything
+for this project. Both sources are other matches, which the rules allow (RULES.md, FAQ.md).
+
+**1. Metrica Sports' open sample data**: three anonymised professional matches with tracking and event
+data. Source `https://github.com/metrica-sports/sample-data`, commit
 `e706dd506b360d69d9d123d5b8026e7294b13996`. `mtah/opengames.py` checks every file against a pinned SHA-256.
+Labels are made from Metrica's own event data for those games, which their analysts produced: H or A is
+the team of the latest pass, carry, recovery, shot or set piece; D runs from a ball out, a foul or a goal
+to the next of those. The tracking is used as it comes: its ball is already missing on 32-40% of graded
+frames, close to our match's 41%.
 
 | Game | Frames | Graded (both periods) | Format |
 |---|---|---|---|
@@ -66,33 +74,56 @@ tracking and event data. Source `https://github.com/metrica-sports/sample-data`,
 | Sample Game 2 | 141,156 | 140,076 | CSV |
 | Sample Game 3 | 143,761 | 142,646 | EPTS, as our match |
 
-**Labels.** Made by `mtah/opengames.py` from Metrica's own event data for those games, which their
-analysts produced: H or A is the team of the latest pass, carry, recovery, shot or set piece; D runs
-from a ball out, a foul or a goal to the next of those. No data of any kind about our match is labelled
-or used for training, and no person labelled anything for this project.
+**2. The DFL/IDSSE open data**: seven Bundesliga matches from 2022/23 (first and second division), with
+optical tracking at 25 fps, under the CC BY 4.0 licence. Bassek, M., Rein, R., Weber, H. et al. "An
+integrated dataset of spatiotemporal and event data in elite soccer." Sci Data 12, 195 (2025),
+`https://doi.org/10.1038/s41597-025-04505-y`. We use the `pysport/idsse-data` mirror on Hugging Face at
+revision `a715a38dfbaf5f58e431727c2b78d174101a703c`, and `mtah/dfl.py` checks every file against a pinned
+SHA-256. **Labels come straight from the tracking provider:** every ball frame carries `BallStatus`
+(alive or dead) and `BallPossession` (home or away). That is how our match's ground truth is built (D
+where the tracking marks the ball dead, else the team it names as owning it; CHALLENGE.md). The optical
+ball is almost never missing, so it is given our feed's gaps with a fixed seed per match (`dfl.degrade`).
 
-**How settings were chosen.** Each open game held out in turn, the learned layer trained on the other
-two, scored with the official scorer (`evaluation/possession_metrics.py`). The tracking was used as it
-comes: its ball is already missing on 32-40% of graded frames, close to our match's 41%.
+| Match | Frames |   | Match | Frames |
+|---|---|---|---|---|
+| J03WMX | 145,967 | | J03WPY | 146,211 |
+| J03WN1 | 141,561 | | J03WQQ | 142,345 |
+| J03WOH | 137,214 | | J03WR9 | 146,810 |
+| J03WOY | 142,536 | | | |
 
-| Pipeline | spellF1 | macroF1 |
+In all, the learned layer trains on 2,854,864 rows: every graded frame of the ten matches, once as it is
+and once with home and away swapped.
+
+**How settings were chosen.** Each match held out in turn, the learned layer retrained without it,
+scored with the official scorer (`evaluation/possession_metrics.py`). Differences under 0.04 are noise
+(EVALUATION.md).
+
+| Pipeline | Metrica (3 games) spellF1 / macroF1 | DFL (7 matches) spellF1 / macroF1 |
 |---|---|---|
-| Our earlier rule-only pipeline | 0.496 | 0.686 |
-| Pooled rules, no learned layer | 0.507 | 0.726 |
-| Pooled rules + learned layer | 0.654 | 0.779 |
-| **+ merge possessions under 2 s (submitted)** | **0.615** | 0.776 |
+| Our earlier rule-only pipeline | 0.496 / 0.686 | |
+| Pooled rules, no learned layer | 0.507 / 0.726 | 0.361 / 0.796 |
+| Learned layer trained on Metrica only, short possessions merged | 0.615 / 0.776 | 0.417 / 0.801 |
+| Learned layer trained on Metrica only | 0.654 / 0.779 | 0.438 / 0.802 |
+| Learned layer trained on DFL only | 0.634 / 0.771 | 0.500 / 0.859 |
+| **Learned layer trained on both (submitted)** | **0.652 / 0.781** | **0.496 / 0.856** |
 
-Differences under 0.04 are noise (EVALUATION.md). The merge costs 0.039 here and was kept anyway: the
-event labels are fragmented themselves (22-26% of their possessions last under 3 s), and FAQ.md warns
-against submissions full of tiny possessions, so the merge guards against a ground truth that is less
-fragmented than event data. Across the halves of the three games spellF1 ranges from 0.56 to 0.69, with
-no systematic drop in either half.
+Training on both ties the best single source on each benchmark, and beats the Metrica-only model by 0.06
+to 0.08 on the matches whose labels are built like our ground truth.
 
-**The public 5 minutes** were scored only as a correctness check: once on the earlier rule-only
-pipeline, and once on the submitted file after it was chosen, with the decision to keep it whatever the
-score unless something was broken. Nothing was chosen or tuned on them. The submitted file scored
-spellF1 0.553 there (17 possessions against 17, team accuracy 0.90, D found on 21% of its frames, all of
-them right); with 17 possessions, that shows alignment, not the size of any gain.
+**Short possessions are kept.** An earlier version merged possessions under 2 s into their neighbours,
+as a guard in case our ground truth was less fragmented than event labels. The DFL labels answered that:
+labels built from tracking are more fragmented, not less.
+
+| Labels | Possessions a minute | Median | Under 3 s |
+|---|---|---|---|
+| Metrica, from events | 3.3-3.7 | about 7 s | 22-26% |
+| DFL, from tracking ownership | 3.8-5.3 | 3.0-4.7 s | 38-50% |
+
+The merge cost 0.02 on every one of the seven DFL matches and 0.039 on Metrica's, so it was dropped.
+
+**The public 5 minutes** were scored only as correctness checks, never to choose or tune: on the earlier
+rule-only pipeline and on the earlier submitted version (spellF1 0.553 there, 17 possessions against
+17, team accuracy 0.90). With 17 possessions, that shows alignment, not the size of any gain.
 
 ## Possession rules
 
@@ -100,8 +131,6 @@ them right); with 17 possessions, that shows alignment, not the size of any gain
   the other team outweighs them, so a slow ball past an opponent does not flip it.
 - **Changes of possession:** need sustained evidence for the other team, from proximity, from shape
   with the ball missing, and from the learned layer.
-- **Short possessions:** under 2 s between two of the other team's are merged into them, so a touch by
-  an opponent that is not control does not count.
 - **Dead ball:** D, never owned by a team. `H D H` is two possessions. A missing ball alone is never D.
 - **Before the second-half kick-off:** D, from the published block (FAQ.md). This is the only
   frame-specific fact in the pipeline.
@@ -109,28 +138,30 @@ them right); with 17 possessions, that shows alignment, not the size of any gain
 
 ## Limitations
 
-- **Labels made from events.** The learned layer learns the style of event-derived labels: possessions
-  change at events, and a pass in flight belongs to the passer. Our match's ground truth comes from
-  corrected tracking (CHALLENGE.md), which may be less fragmented. On our match the pipeline reports
-  355 possessions, 3.35 a minute.
-- **Dead ball is over-called.** On the open games it predicts up to 10 points more D than the labels
-  (finding 74-91% of their dead frames, with 48-87% of what it marks right). On our match it marks
-  34.8% of graded frames D: 28.2% in the first half and 41.4% in the second, of which 3.7 points are
-  the published block. The earlier rule-only pipeline, built on different cues (set-piece tags, a still
-  camera, slow players), also finds more D after the break: 24.4% and 31.6%. So the second half of this
-  match likely has more stoppages, and the rest of the gap fits the over-calling seen on the open games.
-- **Three training games.** A small base; a different league or tracking provider could behave
+- **Two label styles, neither ours.** Metrica's labels come from events, the DFL's from another tracking
+  provider's ownership flag. Ours come from Metrica's corrected tracking. The DFL labels are built the
+  same way as ours, but the two providers may define "owning" differently.
+- **The ball sits differently.** Metrica's open-games ball sits on its carrier: with a slow ball the
+  nearest player is a median 0.04-0.09 m away, against 1.21 m on our match (moving it 0.3-2.5 m off
+  brings Metrica's to 1.09-1.27 m). A model trained on balls at the players' feet may read our match's
+  proximity as weaker than it is.
+- **Dead ball.** On our match the pipeline marks 35.3% of graded frames D: 29.4% in the first half and
+  41.1% in the second, of which 3.7 points are the published block. The earlier rule-only pipeline,
+  built on different cues (set-piece tags, a still camera, slow players), also finds more D after the
+  break (24.4% and 31.6%), so the second half of this match likely has more stoppages. On the DFL
+  matches, whose labels are built like ours, D is 41-52% of frames.
+- **Ten training matches.** Still a small base; another league or tracking provider could behave
   differently.
 - **2D only.** No ball height, so a ball in the air over a player can look close to him.
 
-With more time we would label more open games, add set-piece and camera cues as learned features, and
-calibrate the dead-ball evidence on more data.
+With more time we would label more open matches, add set-piece and camera cues as learned features, and
+train on balls placed off the players the way ours are.
 
 ### Tried and dropped
 
 Our earlier rule-only pipeline remains in the repository (`run.py --real --rules`), with its own
 evidence, touch detection, dead-ball rules (set-piece tags, untagged stoppages, slow players, a still
-camera) and possession decoding. It scored 0.496 on the benchmark. Within it:
+camera) and possession decoding. It scored 0.496 on the Metrica benchmark. Within it:
 
 - Two evidence variants, `evidence_weighted` and `evidence_speed_aware`, did no better.
 - Team spread inside ball gaps scored an AUC of 0.70-0.73 against the pipeline's own output, but as a
@@ -139,20 +170,24 @@ camera) and possession decoding. It scored 0.496 on the benchmark. Within it:
 - The camera as a ball locator was further from the ball (24 m) than the players' average position
   (20 m).
 - Forcing that pipeline's dead-ball cues into the submitted one changed spellF1 by -0.007 on the
-  benchmark, so they were left out.
+  Metrica benchmark, so they were left out.
+
+In the submitted pipeline: training on Metrica only, training on the DFL matches only (0.634 on
+Metrica), and merging possessions under 2 s (see above).
 
 ## Results we can state
 
 | | Value |
 |---|---|
-| Benchmark, three open games held out, spellF1 | 0.615 |
-| Graded frames, H / A / D | 38.3% / 26.9% / 34.8% |
-| Possessions in the graded halves | 355 (179 and 176) |
-| SHA-256 of the submission file | `61e0485fdbd8933e4b92f038f75025afdd7cdc872722cc4dbb475a160c248e41` |
+| Benchmark, held out in turn, spellF1 | Metrica 0.652, DFL 0.496 |
+| Graded frames, H / A / D | 37.1% / 27.6% / 35.3% |
+| Possessions in the graded halves | 399 (205 and 194), 3.77 a minute |
+| SHA-256 of the submission file | `c5c4cafdfd03e7496fb2ce12f65eb7d4617dfad45ce260b9e6141fcecbb1f5b7` |
 
 ## Reproduction
 
-Needs Python 3.15, the competition data bundle and Metrica's open sample games. No GPU.
+Needs Python 3.15, the competition data bundle and both open datasets. No GPU. About 4 minutes after the
+first run, most of it training on one thread.
 
 ```
 python -m venv .venv
@@ -162,14 +197,22 @@ pip install -r requirements.txt
 git clone https://github.com/metrica-sports/sample-data outputs/metrica/sample-data
 git -C outputs/metrica/sample-data checkout e706dd506b360d69d9d123d5b8026e7294b13996
 
+# the 14 DFL files mtah/dfl.py needs, from the pinned mirror revision (PowerShell)
+$rev = "a715a38dfbaf5f58e431727c2b78d174101a703c"
+New-Item -ItemType Directory -Force outputs\idsse | Out-Null
+python -c "from mtah import dfl; print(*dfl.SHA256, sep='\n')" | ForEach-Object {
+    Invoke-WebRequest "https://huggingface.co/datasets/pysport/idsse-data/resolve/$rev/$_" -OutFile "outputs\idsse\$_" }
+
 $env:MTAH_DATA_DIR = "path\to\bundle"   # Linux or macOS: export MTAH_DATA_DIR=path/to/bundle; skip if in ./data
 python run.py --real --out "The Playmakers.csv"
 python evaluation/validate_submission.py "The Playmakers.csv"
 ```
 
-The open games are found in `outputs/metrica/sample-data/data`; elsewhere, set `$MTAH_OPEN_GAMES` or
-pass `--open-games`. The first run reads the ATD and caches it in `outputs/cache/`, which takes a few
-minutes. Everything fitted uses fixed seeds and one thread, so the run writes the same file every time
-and prints its SHA-256 to compare with the one above.
+On Linux or macOS, fetch the same 14 files with `curl -L -o outputs/idsse/<file> <url>`. The Metrica
+games are found in `outputs/metrica/sample-data/data` and the DFL files in `outputs/idsse`; elsewhere, set
+`$MTAH_OPEN_GAMES` and `$MTAH_DFL_GAMES`, or pass `--open-games` and `--dfl-games`. The first run reads
+the ATD and the DFL XML and caches them in `outputs/cache/`, which takes a few minutes. Everything fitted
+uses fixed seeds and one thread, so the run writes the same file every time and prints its SHA-256 to
+compare with the one above.
 
 `python -m pytest` runs the tests, on synthetic data and small fake files only.
