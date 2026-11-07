@@ -5,3 +5,6 @@ scipy==1.18.1
 pandas==3.1.0
 pytest==9.1.1
 kloppy==3.18.0  # reads the ATD (mtah/io_atd.py via starter/load_atd.py); same pin as the starter
+scikit-learn==1.9.1  # the learned layer and shape model in mtah/fusion.py
+joblib==1.6.0  # scikit-learn's own dependency, pinned so it cannot drift
+threadpoolctl==3.8.0  # run.py keeps the learned layer on one thread, so every computer writes the same file

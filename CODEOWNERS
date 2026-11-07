@@ -26,6 +26,9 @@
 /mtah/segment.py        @ThePlaymakers/r4
 /mtah/deadball.py       @ThePlaymakers/r4
 /mtah/xpolicy.py        @ThePlaymakers/r4
+/mtah/fusion.py         @ThePlaymakers/r4
+
+/mtah/opengames.py      @ThePlaymakers/r5
 
 /mtah/synthetic.py      @ThePlaymakers/r5
 /scripts/               @ThePlaymakers/r5
