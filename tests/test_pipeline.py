@@ -130,10 +130,13 @@ def test_evidence_shape_and_nan(syn):
 
 
 def test_evidence_sign():
+    # Two still scenes, not one track: a ball moving 9 m in one frame is a glitch that ball_clean
+    # flags lost, and evidence is exactly 0 on lost frames.
     players = np.array([[[0.0, 0.0], [10.0, 0.0]]] * 2)  # home at origin, away at x=10
-    tr = Tracking(np.array([[0.5, 0.0], [9.5, 0.0]]), players, np.array([0, 1]))
-    e = evidence.evidence(tr)
-    assert e[0] > 0 > e[1]
+    near_home = Tracking(np.array([[0.5, 0.0]] * 2), players, np.array([0, 1]))
+    near_away = Tracking(np.array([[9.5, 0.0]] * 2), players, np.array([0, 1]))
+    assert (evidence.evidence(near_home) > 0).all()
+    assert (evidence.evidence(near_away) < 0).all()
 
 
 # -- touches (R3) -----------------------------------------------------------------------------
