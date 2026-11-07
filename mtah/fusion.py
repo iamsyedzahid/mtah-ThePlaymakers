@@ -36,6 +36,15 @@ MIN_SPELL_FRAMES = 0  # no merge: 2 s cost 0.02 on the DFL matches and 0.039 on 
 W_RULE, W_LEARNED = 1.0, 0.5
 SWITCH_TEAM, SWITCH_DEAD = 14.0, 30.0
 MISSING = -1.0  # how a missing feature value reaches the learned layer, in training and in use
+SHAPE_WEIGHT = 0.6
+
+# Teammates' signals (team_inputs). Off unless the open-games benchmark says otherwise.
+SHAPE_SOURCE = "ours"  # or "r2": R2's per-half shape model on lost frames, in place of ours
+EXTRA: tuple[str, ...] = ()  # learned-layer inputs to add: "r3" (R3's receptions), "r2" (R2's four columns)
+R2_SHAPE_COLUMN = 2  # "r2_shape" in mtah/r2_features.FEATURE_NAMES
+TEAM_INPUT_SIGNS = {"r2": np.array([-1.0, -1.0, -1.0, -1.0]), "r3": np.array([-1.0, 1.0, -1.0])}
+R3_SINCE_CAP_S = 30.0
+R3_BALANCE_S = 10.0
 
 
 def _roll_mean(x, w):
@@ -193,8 +202,62 @@ def dead_llr(f, halves):
     return llr
 
 
-def learned_features(f, players, team, pitch, halves, swap=False):
-    """The learned layer's inputs. swap=True exchanges home and away (labels must be swapped too)."""
+def team_inputs(ball, players, team, pitch, halves):
+    """The teammates' per-frame signals the options below ask for: {"r2": [T, 4], "r3": [T, 3]}.
+
+    "r2": R2's fusion_features (mtah/r2_features.py): nearest-player evidence, time-to-ball lead, and
+    the half's own shape-model logit on every frame and on lost frames. "r3": from R3's receptions
+    (mtah/touches.py), see r3_columns. Every column is home-positive except r3's "since", so swapping
+    the teams negates all but that one (TEAM_INPUT_SIGNS).
+    """
+    out = {}
+    if SHAPE_SOURCE == "r2" or "r2" in EXTRA:
+        from mtah.r2_features import fusion_features
+
+        out["r2"] = np.asarray(fusion_features(ball, players, team, pitch, halves)[0], dtype=float)
+    if "r3" in EXTRA:
+        out["r3"] = r3_columns(ball, players, team, halves)
+    return out
+
+
+def r3_columns(ball, players, team, halves):
+    """[T, 3] from R3's receptions (deflections never flip possession): +1/-1 for the team that made the
+    half's latest reception (0 before the first), seconds since it (capped), and home minus away
+    receptions over the last R3_BALANCE_S."""
+    from mtah.touches import touches
+
+    T = len(ball)
+    receptions = [e for e in touches(ball, players, team) if e.kind == "reception"]
+    signed = np.zeros(T)
+    for e in receptions:
+        signed[e.frame] += 1.0 if e.team == 0 else -1.0
+    total = np.concatenate([[0.0], np.cumsum(signed)])
+    idx = np.arange(T)
+    balance = total[idx + 1] - total[np.maximum(idx + 1 - int(R3_BALANCE_S * FPS), 0)]
+    last, since = np.zeros(T), np.full(T, R3_SINCE_CAP_S)
+    for a, b in halves:
+        current, at = 0.0, None
+        made = {e.frame: (1.0 if e.team == 0 else -1.0) for e in receptions if a <= e.frame < b}
+        for t in range(a, b):
+            if t in made:
+                current, at = made[t], t
+            last[t] = current
+            since[t] = R3_SINCE_CAP_S if at is None else min((t - at) / FPS, R3_SINCE_CAP_S)
+    return np.column_stack([last, since, balance])
+
+
+def extra_columns(inputs):
+    """(columns, sign under a team swap) for EXTRA, in its order; None when EXTRA is empty."""
+    if not EXTRA:
+        return None
+    cols = [inputs[name] for name in EXTRA]
+    signs = [TEAM_INPUT_SIGNS[name] for name in EXTRA]
+    return np.column_stack(cols), np.concatenate(signs)
+
+
+def learned_features(f, players, team, pitch, halves, swap=False, extra=None):
+    """The learned layer's inputs. swap=True exchanges home and away (labels must be swapped too).
+    extra: optional (columns, signs) from extra_columns, appended after ours."""
     length, width = pitch
     T = len(f["vis"])
     d1h, d1a, d2h, d2a = (f["d1a"], f["d1h"], f["d2a"], f["d2h"]) if swap else (f["d1h"], f["d1a"], f["d2h"], f["d2a"])
@@ -217,7 +280,12 @@ def learned_features(f, players, team, pitch, halves, swap=False):
         cols[f"d1a_m{w}"] = _roll_mean(d1a, w)
     cols["shape_dx"] = (f["ax"] - f["hx"]) * (-1 if swap else 1) * sign
     names = sorted(cols)
-    return np.nan_to_num(np.column_stack([np.asarray(cols[n], float) for n in names]), nan=MISSING), names
+    feats = np.nan_to_num(np.column_stack([np.asarray(cols[n], float) for n in names]), nan=MISSING)
+    if extra is not None:
+        more, signs = extra
+        feats = np.column_stack([feats, more * signs if swap else more])
+        names = names + [f"extra{k}" for k in range(more.shape[1])]
+    return feats, names
 
 
 def swap_codes(codes):
@@ -229,9 +297,10 @@ def swap_codes(codes):
 def training_rows(gm):
     """One game's (features, codes) pairs, as it is and with home and away swapped. Graded frames only."""
     f = frame_features(gm["ball"], gm["players"], gm["team"], gm["pitch"])
+    extra = extra_columns(team_inputs(gm["ball"], gm["players"], gm["team"], gm["pitch"], gm["halves"])) if EXTRA else None
     rows = []
     for swap in (False, True):
-        feats, _ = learned_features(f, gm["players"], gm["team"], gm["pitch"], gm["halves"], swap=swap)
+        feats, _ = learned_features(f, gm["players"], gm["team"], gm["pitch"], gm["halves"], swap=swap, extra=extra)
         y = swap_codes(gm["codes"]) if swap else gm["codes"]
         keep = y != X
         rows.append((feats[keep], y[keep]))
@@ -252,10 +321,10 @@ def train(games):
     return fit([r for gm in games for r in training_rows(gm)])
 
 
-def learned_logp(model, f, players, team, pitch, halves):
+def learned_logp(model, f, players, team, pitch, halves, extra=None):
     """Log-probabilities [T, 3] for H, A, D, averaged over both team orientations."""
-    straight, _ = learned_features(f, players, team, pitch, halves, swap=False)
-    swapped, _ = learned_features(f, players, team, pitch, halves, swap=True)
+    straight, _ = learned_features(f, players, team, pitch, halves, swap=False, extra=extra)
+    swapped, _ = learned_features(f, players, team, pitch, halves, swap=True, extra=extra)
     p = 0.5 * (model.predict_proba(straight) + model.predict_proba(swapped)[:, [1, 0, 2]])
     return np.log(np.clip(p, 1e-4, 1))
 
@@ -300,12 +369,17 @@ def label(ball, players, team, pitch, halves, model=None, known_dead=None, min_s
     ball, players, team = np.asarray(ball, float), np.asarray(players, float), np.asarray(team)
     T = len(ball)
     f = frame_features(ball, players, team, pitch)
-    lo = team_logodds(f) + shape_logodds(f, halves) * np.logical_not(f["vis"])
+    inputs = team_inputs(ball, players, team, pitch, halves) if (SHAPE_SOURCE == "r2" or EXTRA) else {}
+    if SHAPE_SOURCE == "r2":  # R2's per-half shape model, scaled exactly as ours is
+        shape = np.clip(inputs["r2"][:, R2_SHAPE_COLUMN], -2, 2) * SHAPE_WEIGHT
+    else:
+        shape = shape_logodds(f, halves, SHAPE_WEIGHT)
+    lo = team_logodds(f) + shape * np.logical_not(f["vis"])
     score = np.zeros((T, 3))
     score[:, H], score[:, A] = W_RULE * lo / 2, -W_RULE * lo / 2
     score[:, D] = W_RULE * dead_llr(f, halves)
     if model is not None:
-        score += W_LEARNED * learned_logp(model, f, players, team, pitch, halves)
+        score += W_LEARNED * learned_logp(model, f, players, team, pitch, halves, extra_columns(inputs) if EXTRA else None)
     if known_dead is not None:
         score[known_dead] = [-50, -50, 50]
     codes = np.full(T, X, np.int8)
