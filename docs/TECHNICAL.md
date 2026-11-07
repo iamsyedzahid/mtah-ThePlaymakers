@@ -88,8 +88,11 @@ against submissions full of tiny possessions, so the merge guards against a grou
 fragmented than event data. Across the halves of the three games spellF1 ranges from 0.56 to 0.69, with
 no systematic drop in either half.
 
-**The public 5 minutes** were scored once, on an earlier version, to check that the pipeline was aligned
-and well-formed. Nothing was chosen or tuned on them.
+**The public 5 minutes** were scored only as a correctness check: once on the earlier rule-only
+pipeline, and once on the submitted file after it was chosen, with the decision to keep it whatever the
+score unless something was broken. Nothing was chosen or tuned on them. The submitted file scored
+spellF1 0.553 there (17 possessions against 17, team accuracy 0.90, D found on 21% of its frames, all of
+them right); with 17 possessions, that shows alignment, not the size of any gain.
 
 ## Possession rules
 
