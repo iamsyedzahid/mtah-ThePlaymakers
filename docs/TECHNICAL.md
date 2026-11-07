@@ -113,7 +113,9 @@ and well-formed. Nothing was chosen or tuned on them.
 - **Dead ball is over-called.** On the open games it predicts up to 10 points more D than the labels
   (finding 74-91% of their dead frames, with 48-87% of what it marks right). On our match it marks
   34.8% of graded frames D: 28.2% in the first half and 41.4% in the second, of which 3.7 points are
-  the published block. We could not tell how much of the rest is the match itself.
+  the published block. The earlier rule-only pipeline, built on different cues (set-piece tags, a still
+  camera, slow players), also finds more D after the break: 24.4% and 31.6%. So the second half of this
+  match likely has more stoppages, and the rest of the gap fits the over-calling seen on the open games.
 - **Three training games.** A small base; a different league or tracking provider could behave
   differently.
 - **2D only.** No ball height, so a ball in the air over a player can look close to him.
