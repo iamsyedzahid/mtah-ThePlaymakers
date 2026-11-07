@@ -10,12 +10,14 @@ Conventions:
   SetPiece.end is INCLUSIVE (start..end frames), so end = tag['end_frame'] - 1.
 - Team tags name clubs (e.g. 'Barcelona', 'Atletic Club'). They are mapped to 0 (home) / 1 (away).
 - 'N/A' Team tag (including all throw-ins) maps to None.
+- DEFENDING phase tags tag the team WITHOUT the ball (DATA.md, TEAM_PLAN.md).
+  An explicit 'possessing_team_id' field is provided, inverting team_id for DEFENDING codes.
 """
 from pathlib import Path
 from typing import Sequence
 import xml.etree.ElementTree as ET
 
-from mtah.config import FPS, data_dir as default_data_dir
+from mtah.config import FPS, N_FRAMES, data_dir as default_data_dir
 from mtah.interfaces import SetPiece
 
 SET_PIECES_CODE = "set pieces"
@@ -40,6 +42,7 @@ def load_tags(
         - 'start_frame_inclusive': int
         - 'end_frame_inclusive': int
         - 'team_id': int | None (0 for home, 1 for away, None for N/A)
+        - 'possessing_team_id': int | None (inverts team_id for DEFENDING codes)
     """
     if data_dir is None:
         data_dir = default_data_dir()
@@ -110,9 +113,20 @@ def parse_tags_from_element(
         else:
             team_id = None
 
-        code = instance.findtext("code") or ""
+        code = (instance.findtext("code") or "").strip()
+        code_lower = code.lower()
+
+        # DEFENDING codes name the team WITHOUT the ball (DATA.md).
+        # possessing_team_id provides the true possession prior:
+        if team_id is not None and code_lower.startswith("defending"):
+            possessing_team_id = 1 - team_id
+        else:
+            possessing_team_id = team_id
+
         # The XML end_frame is exclusive; SetPiece and inclusive frame ranges use end_frame - 1
-        end_frame_inclusive = max(start_frame, end_frame - 1)
+        # Hard clamp between 0 and N_FRAMES - 1 to protect downstream contracts
+        start_frame_inclusive = max(0, min(start_frame, N_FRAMES - 1))
+        end_frame_inclusive = max(start_frame_inclusive, min(end_frame - 1, N_FRAMES - 1))
 
         out.append({
             "code": code,
@@ -120,9 +134,10 @@ def parse_tags_from_element(
             "end_s": end_s,
             "start_frame": start_frame,
             "end_frame": end_frame,
-            "start_frame_inclusive": start_frame,
+            "start_frame_inclusive": start_frame_inclusive,
             "end_frame_inclusive": end_frame_inclusive,
             "team_id": team_id,
+            "possessing_team_id": possessing_team_id,
             "tags": tags,
         })
 
