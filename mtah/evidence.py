@@ -23,8 +23,11 @@ evidence_shape: the complement, for the frames evidence() has to leave at 0. Non
 evidence_calibrated, evidence_shape_calibrated: the two above with the calibration fitted on
     Metrica's open games (REACH_CALIBRATION, SHAPE_TEMPERATURE; mtah/evidence_fit.py).
 
-evidence: still the naive placeholder (nearest player, weighted by distance) until the
-    leave-one-game-out comparison on the Metrica open games picks the combination to ship.
+evidence: the nearest player's team, weighted by exp(-distance / SIGMA_M). Chosen by
+    leave-one-game-out spellF1 on Metrica's open games, ball masked and displaced like ours
+    (python -m mtah.evidence_fit): nearest 0.43-0.45, best reach variant 0.39, calibrating either
+    a tie. R4 should add evidence_shape_calibrated on lost frames, where evidence() is 0: nearest
+    plus shape scores 0.53-0.54, +0.08 to +0.10, better on every game with both ball masks.
 """
 import math
 from typing import NamedTuple, Sequence
@@ -68,11 +71,12 @@ FIT_DECIMALS = 6  # fitted weights are rounded, so last-bit BLAS differences can
 # Reach: logit p_home = lead * max(a + b * best_t + c * ball_speed, 0), so the faster team is
 # always favoured, more when someone is near the ball and the ball is slow. (a, 0, 0) is plain
 # Platt scaling. Shape: logit p_home = k * the half's own model logit.
-# Fitted on games 1-3 (sample-data commit e706dd5, ball masks of seed offset 0); rerun the command
-# above to regenerate them. The nearest-player evidence needs no calibration: its fitted Platt
-# slope is 0.97, so exp(-distance / SIGMA_M) already says what it means.
-REACH_CALIBRATION = (1.815218, 0.0, 0.0)
-SHAPE_TEMPERATURE = 0.647477
+# Fitted on games 1-3 (sample-data commit e706dd5), ball masked and displaced like ours, mask seed
+# offset 0; rerun the command above to regenerate them. The nearest-player evidence is left as it
+# is: its fitted Platt slope is 0.97 on Metrica's own ball and 1.24 on the displaced one, and
+# calibrating it ties on spellF1 either way.
+REACH_CALIBRATION = (1.623518, 0.0, 0.0)
+SHAPE_TEMPERATURE = 0.707065
 BALL_VEL_HALF_FRAMES = 3  # ball velocity from a central difference over 6 frames (0.24 s)
 
 

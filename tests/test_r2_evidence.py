@@ -352,6 +352,30 @@ def test_mask_ball_is_seeded_and_shaped_like_our_match():
     assert 0.3 < a.mean() < 0.5
 
 
+def test_displace_ball_is_seeded_and_sized_like_our_ball():
+    from mtah.synthetic import DRIBBLE_RANGE_M
+
+    a, b = mg.displace_ball(10_000, seed=1), mg.displace_ball(10_000, seed=1)
+    np.testing.assert_array_equal(a, b)
+    assert not np.array_equal(a, mg.displace_ball(10_000, seed=2))
+    size = np.linalg.norm(a, axis=1)
+    lo, hi = DRIBBLE_RANGE_M
+    assert size.max() <= hi + 1e-9  # blending two offsets never makes a longer one
+    knots = size[::25]
+    assert knots.min() >= lo - 1e-9 and np.median(knots) > 1.0
+    assert np.abs(np.diff(a, axis=0)).max() < 2 * hi / 25 + 1e-9  # smooth: no per-frame jumps
+
+
+def test_masked_tracking_displaces_only_the_seen_ball():
+    syn = make_synthetic(3_000, seed=0)
+    game = mg.OpenGame(1, syn.tracking, ((0, 2_999),), syn.labels, np.array([100, 900]))
+    plain, moved = mg.masked_tracking(game, 4), mg.masked_tracking(game, 4, displace=True)
+    np.testing.assert_array_equal(np.isnan(plain.ball), np.isnan(moved.ball))  # same mask
+    seen = ~np.isnan(plain.ball[:, 0])
+    np.testing.assert_allclose(moved.ball[seen] - plain.ball[seen], mg.displace_ball(3_000, 4)[seen])
+    np.testing.assert_array_equal(moved.players, syn.tracking.players)
+
+
 def _write_metrica_csv(path, team_name, xy, period):
     """Metrica's CSV layout: two label rows, a header, then Period, Frame, Time and x, y pairs."""
     n, k = xy.shape[0], xy.shape[1] - 1
@@ -472,7 +496,9 @@ def test_evidence_to_logit_inverts_and_stays_finite():
     np.testing.assert_array_equal(ev.evidence_to_logit(-e), -logit)
 
 
-def test_leave_one_game_out_runs_on_synthetic_games():
+def test_leave_one_game_out_runs_on_synthetic_games(monkeypatch):
+    monkeypatch.setattr(fit, "COSTS", (8.0, 64.0))  # a smoke test: the grids' size is not the point
+    monkeypatch.setattr(fit, "SHAPE_WEIGHTS", (1.0, 2.0))
     data = [fit.prepare(synthetic_game(k, n=4_000), seed=k) for k in (1, 2, 3)]
     results = fit.leave_one_game_out(data, log=lambda *_: None)
     assert set(results) == set(fit.CANDIDATES)

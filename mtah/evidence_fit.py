@@ -3,7 +3,10 @@
     python -m mtah.evidence_fit            # leave-one-game-out table, then the calibration to ship
 
 Never touches our match: it reads outputs/metrica/sample through mtah/metrica_games.py, where the
-labels come from Metrica's event data and the ball is hidden the way our match loses it.
+labels come from Metrica's event data, the ball is hidden the way our match loses it, and (unless
+--as-given) moved off its carrier the way ours sits off the players. Without that, the nearest
+player is a median 0.07-0.11 m from a slow ball instead of our 1.2 m, and every evidence looks
+twice as sure as it is on our match.
 
 The comparison isolates the evidence. Every candidate goes through the same decoder: dead ball is
 taken from the event labels (so every candidate gets the same D), and inside each live stretch a
@@ -76,8 +79,8 @@ class Calibration(NamedTuple):
     shape_k: float
 
 
-def prepare(game: mg.OpenGame, seed: int) -> Prepared:
-    tr = mg.masked_tracking(game, seed)
+def prepare(game: mg.OpenGame, seed: int, displace: bool = True) -> Prepared:
+    tr = mg.masked_tracking(game, seed, displace=displace)
     filled, lost = ball_clean(tr.ball)
     scan = ev.scan_teams(filled, tr.players, tr.team)
     lead, best, speed = ev.reach_inputs(scan, lost)
@@ -221,18 +224,19 @@ def choose(results: dict, names: Sequence[str]) -> str:
     return chosen
 
 
-def main(mask_offset: int = 0) -> None:
+def main(mask_offset: int = 0, displace: bool = True) -> None:
     t0 = time.perf_counter()
     data = []
     for number in mg.GAMES:
         game = mg.load_game(number)
-        data.append(prepare(game, MASK_SEED[number] + mask_offset))
+        data.append(prepare(game, MASK_SEED[number] + mask_offset, displace))
         d = data[-1]
         alive = (d.gt == pm.H) | (d.gt == pm.A)
         print(f"game {number}: {len(d.gt)} frames, live {alive.mean():.3f}, lost on live frames {d.lost[alive].mean():.3f}")
     results = leave_one_game_out(data)
 
-    print(f"\nleave-one-game-out spellF1 (held-out game), ties under {NOISE}, mask offset {mask_offset}; "
+    print(f"\nleave-one-game-out spellF1 (held-out game), ties under {NOISE}, mask offset {mask_offset}, "
+          f"ball {'displaced like ours' if displace else 'as Metrica gives it'}; "
           f"{time.perf_counter() - t0:.0f} s")
     print(f"{'candidate':<20}" + "".join(f"{'game ' + str(d.number):>9}" for d in data) + f"{'mean':>9}{'macroF1':>9}   chosen (cost, shape weight) | spells pred/gt")
     for name in CANDIDATES:
@@ -255,4 +259,7 @@ def main(mask_offset: int = 0) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--mask-offset", type=int, default=0, help="added to every game's ball-mask seed")
-    main(parser.parse_args().mask_offset)
+    parser.add_argument("--as-given", action="store_true",
+                        help="keep Metrica's corrected ball on its carrier instead of displacing it like ours")
+    args = parser.parse_args()
+    main(args.mask_offset, displace=not args.as_given)

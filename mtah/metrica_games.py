@@ -18,6 +18,8 @@ Labels come from Metrica's event data, the same way for all three games:
 The ball is almost never missing in these games, unlike ours (41% of graded frames). mask_ball
 hides it the way R1 measured our match losing it (mtah/synthetic.py): about 41% of frames in gaps
 of exponential length with mean 430 frames, many starting just before a player takes the ball.
+And their corrected ball sits on its carrier, while ours is detected metres off the players:
+displace_ball moves it off as R1 measured ours (masked_tracking(..., displace=True)).
 """
 import json
 from pathlib import Path
@@ -26,14 +28,17 @@ from typing import Iterable, NamedTuple, Sequence
 import numpy as np
 
 from mtah.config import FPS
-from mtah.interfaces import A, D, H, HOME, AWAY, LABEL_DTYPE, X, BoolArray, Interval, IntArray, LabelArray, Tracking
-from mtah.synthetic import BALL_LOST_FRAC, CROWD_GAP_PROB, MEAN_GAP_FRAMES
+from mtah.interfaces import (A, D, H, HOME, AWAY, LABEL_DTYPE, X, BoolArray, FloatArray, Interval, IntArray,
+                             LabelArray, Tracking)
+from mtah.synthetic import BALL_LOST_FRAC, CROWD_GAP_PROB, DRIBBLE_RANGE_M, MEAN_GAP_FRAMES
 
 REPO = Path(__file__).resolve().parents[1]
 METRICA_DIR = REPO / "outputs" / "metrica" / "sample" / "data"
 CACHE_DIR = REPO / "outputs" / "cache"
 METRICA_PITCH_M = (105.0, 68.0)  # README: 105 x 68 m for games 1-2; game 3's metadata agrees
 GAMES = (1, 2, 3)
+
+DISPLACE_STREAM = 7  # displace_ball's random stream, apart from mask_ball's for the same seed
 
 POSSESSION_EVENTS = frozenset({"PASS", "CARRY", "RECOVERY", "SHOT", "SET PIECE", "BALL LOST"})
 NOT_LIVE = frozenset({"CARD"})  # booked while the ball is dead, so its frames say nothing about play
@@ -136,11 +141,34 @@ def mask_ball(n_frames: int, contacts: IntArray, seed: int) -> BoolArray:
     return hidden
 
 
-def masked_tracking(game: OpenGame, seed: int) -> Tracking:
-    """The game's tracking with the ball hidden as mask_ball(seed) says."""
+def masked_tracking(game: OpenGame, seed: int, displace: bool = False) -> Tracking:
+    """The game's tracking with the ball hidden as mask_ball(seed) says, and with displace also
+    moved off the players as displace_ball(seed) says."""
     ball = game.tracking.ball.copy()
+    if displace:
+        ball += displace_ball(game.tracking.n_frames, seed)
     ball[mask_ball(game.tracking.n_frames, game.contacts, seed)] = np.nan
     return Tracking(ball, game.tracking.players, game.tracking.team, game.tracking.fps)
+
+
+def displace_ball(n_frames: int, seed: int) -> FloatArray:
+    """[T, 2] metres to add to Metrica's ball so it sits off the players as ours does.
+
+    Metrica's corrected ball sits on its carrier: with a slow ball the nearest player is a median
+    0.07-0.11 m away, 82-95% within 1 m. Ours is detected apart from the players: R1 measured a
+    median 1.2 m and 44% within 1 m, and modelled it as the ball running DRIBBLE_RANGE_M from its
+    carrier's tracked position (mtah/synthetic.py). Here every second gets an offset of that size
+    in a random direction, blended linearly between seconds; the open games then give 1.14-1.21 m
+    and 39-42%. No per-frame jitter: it would add flicker that neither data set has. A separate
+    random stream from mask_ball's for the same seed.
+    """
+    rng = np.random.default_rng([seed, DISPLACE_STREAM])
+    knots = np.arange(0, n_frames + FPS, FPS)
+    radius = rng.uniform(*DRIBBLE_RANGE_M, size=knots.size)
+    angle = rng.uniform(0.0, 2 * np.pi, size=knots.size)
+    frames = np.arange(n_frames)
+    return np.column_stack([np.interp(frames, knots, radius * np.cos(angle)),
+                            np.interp(frames, knots, radius * np.sin(angle))])
 
 
 # -- reading ----------------------------------------------------------------------------------
