@@ -15,17 +15,23 @@ def to_x_policy(
     out = np.asarray(labels).astype(LABEL_DTYPE)  # always a copy
     if confidence is None:
         return out
+        
     confidence = np.asarray(confidence, dtype=float)
-    if confidence.shape != out.shape:
-        raise ValueError(f"confidence must be {out.shape}, got {confidence.shape}")
-    if margin < 1:
-        raise ValueError("margin must be at least 1 so X never sits on a run boundary")
-
+    
+    # --- THE FIX: Smooth the confidence! ---
+    # Raw evidence is too noisy. A 2-second moving average prevents 
+    # momentary dips from splintering possessions into X.
+    window_size = 2 * FPS
+    kernel = np.ones(window_size) / window_size
+    smooth_conf = np.convolve(confidence, kernel, mode='same')
+    
     for start, end in zip(*run_bounds(out)):
         if out[start] not in (H, A):
             continue
         lo, hi = start + margin, end - margin
         if lo < hi:
-            inner = out[lo:hi]  # a view, so assigning into it edits out
-            inner[confidence[lo:hi] < threshold] = X
+            inner = out[lo:hi] 
+            # Use the smoothed confidence instead of raw!
+            inner[smooth_conf[lo:hi] < threshold] = X
+            
     return out

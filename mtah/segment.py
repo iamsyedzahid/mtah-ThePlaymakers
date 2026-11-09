@@ -21,12 +21,46 @@ def run_bounds(labels: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     change = np.flatnonzero(labels[1:] != labels[:-1]) + 1
     return np.r_[0, change], np.r_[change, labels.size]
 
+
+def _merge_short_runs(labels: np.ndarray) -> np.ndarray:
+    """Absorb H/A runs shorter than MIN_RUN_FRAMES into a neighbouring H/A run."""
+    labels = labels.copy()
+    for _ in range(10):  # repeat until stable (bounded)
+        starts, ends = run_bounds(labels)
+        changed = False
+        for i, (s, en) in enumerate(zip(starts, ends)):
+            lab = labels[s]
+            if lab == D or (en - s) >= MIN_RUN_FRAMES:
+                continue
+            left = labels[starts[i - 1]] if i > 0 else None
+            right = labels[starts[i + 1]] if i + 1 < len(starts) else None
+            left_ok = left is not None and left != D
+            right_ok = right is not None and right != D
+            if left_ok and right_ok:
+                # pick the longer neighbour
+                ll = ends[i - 1] - starts[i - 1]
+                rl = ends[i + 1] - starts[i + 1]
+                new = left if ll >= rl else right
+            elif left_ok:
+                new = left
+            elif right_ok:
+                new = right
+            else:
+                continue
+            if new != lab:
+                labels[s:en] = new
+                changed = True
+        if not changed:
+            break
+    return labels
+
+
 def segment(
     e: FloatArray, lost_mask: BoolArray, dead_mask: BoolArray, touches: Sequence[Touch]
 ) -> LabelArray:
     """
     Turn evidence and touches into labels [T] in {H, A, D}. Never X.
-    Uses a 3-state Viterbi decoder with strict reception-only switching.
+    Uses a 3-state Viterbi decoder with soft, reception-aware switching.
     """
     e = np.asarray(e, dtype=float)
     lost = np.asarray(lost_mask, dtype=bool)
@@ -41,70 +75,55 @@ def segment(
     if T == 0:
         return np.full(0, H, dtype=LABEL_DTYPE)
 
-    # Only receptions allow a possession flip
-    receptions = [t for t in touches if t.kind == "reception"]
-    is_reception = np.zeros(T, dtype=bool)
-    for r in receptions:
-        is_reception[r.frame] = True
+    # --- normalise evidence scale ---
+    e = np.nan_to_num(e, nan=0.0, posinf=0.0, neginf=0.0)
+    usable = ~lost & ~dead & (e != 0)
+    scale = np.median(np.abs(e[usable])) if usable.any() else 1.0
+    if scale <= 0:
+        scale = 1.0
+    ev = np.where(lost, 0.0, e / scale)
+
+    # --- reception proximity (soft window) ---
+    near_reception = np.zeros(T, dtype=bool)
+    for t in touches:
+        if t.kind == "reception":
+            lo = max(0, t.frame - RECEPTION_TOL)
+            hi = min(T, t.frame + RECEPTION_TOL + 1)
+            near_reception[lo:hi] = True
 
     # States: 0=H, 1=A, 2=D
-    V = np.full((T, 3), -np.inf)
+    NEG = -1e18  # finite "forbidden" so we never get all -inf paths
+    V = np.full((T, 3), NEG)
     B = np.zeros((T, 3), dtype=int)
 
-    # Initialize based on evidence, but ensure valid starting numbers
-    if dead[0]:
-        V[0, 2] = 0.0
-    else:
-        V[0, 0] = e[0] if not lost[0] else 0.001 
-        V[0, 1] = -e[0] if not lost[0] else -0.001
+    def obs(t: int) -> np.ndarray:
+        if dead[t]:
+            return np.array([NEG, NEG, 0.0])
+        return np.array([ev[t], -ev[t], NEG])
+
+    V[0] = obs(0)
 
     for t in range(1, T):
-        obs = np.zeros(3)
-        if dead[t]:
-            # Force D state
-            obs[0], obs[1], obs[2] = -np.inf, -np.inf, 10.0 
-        else:
-            # Evidence dictates observation
-            obs[0] = e[t] if not lost[t] else 0.0
-            obs[1] = -e[t] if not lost[t] else 0.0
-            obs[2] = -np.inf
+        o = obs(t)
+        sw = SWITCH_COST_AT_RECEPTION if near_reception[t] else SWITCH_COST_ELSEWHERE
 
-        for curr_state in range(3):
-            if obs[curr_state] == -np.inf:
-                continue
-                
-            best_val = -np.inf
-            best_prev = 0
-            
-            for prev_state in range(3):
-                cost = 0.0
-                
-                # Rule: D only happens if dead_mask is True
-                if prev_state != 2 and curr_state == 2 and not dead[t]:
-                    cost = -np.inf
-                
-                # Rule: Possession flips ONLY on a reception
-                if (prev_state == 0 and curr_state == 1) or (prev_state == 1 and curr_state == 0):
-                    if not is_reception[t]:
-                        # Absolutely forbidden to switch without a touch
-                        cost = -np.inf  
-                        
-                val = V[t-1, prev_state] + cost + obs[curr_state]
-                if val > best_val:
-                    best_val = val
-                    best_prev = prev_state
-                    
-            V[t, curr_state] = best_val
-            B[t, curr_state] = best_prev
+        # trans[prev, curr] = additive cost
+        trans = np.zeros((3, 3))
+        trans[0, 1] = trans[1, 0] = -sw       # H<->A flip
+        # D -> H/A (restart) and H/A -> D (dead ball) are free;
+        # D membership itself is enforced through obs()
+
+        cand = V[t - 1][:, None] + trans + o[None, :]   # [prev, curr]
+        B[t] = np.argmax(cand, axis=0)
+        V[t] = cand[B[t], np.arange(3)]
 
     states = np.zeros(T, dtype=int)
-    states[-1] = np.argmax(V[-1, :])
-    
+    states[-1] = int(np.argmax(V[-1]))
     for t in range(T - 1, 0, -1):
         states[t - 1] = B[t, states[t]]
 
     labels = np.full(T, H, dtype=LABEL_DTYPE)
     labels[states == 1] = A
     labels[states == 2] = D
-    
-    return labels
+
+    return _merge_short_runs(labels)
