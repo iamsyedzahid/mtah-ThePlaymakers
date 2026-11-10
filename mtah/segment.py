@@ -5,7 +5,7 @@ import numpy as np
 from mtah.config import FPS
 from mtah.interfaces import A, AWAY, D, H, HOME, LABEL_DTYPE, BoolArray, FloatArray, LabelArray, Touch
 
-MIN_RUN_FRAMES = 2 * FPS  # shorter H/A runs are flicker
+MIN_RUN_FRAMES = 2 * FPS  # chosen on open games (Metrica x2 ball masks, DFL x7), not on our match
 
 # ---- tunables (in units of "typical per-frame evidence magnitude") ----
 RECEPTION_TOL = 3          # frames either side of a reception where a flip is cheap
