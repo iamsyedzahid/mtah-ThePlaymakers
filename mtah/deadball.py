@@ -5,7 +5,7 @@ import numpy as np
 from mtah.interfaces import BoolArray, Interval
 from mtah.config import SECOND_HALF_D_BLOCK
 
-DEAD_FRACTION = 0.9  # share of each Smart Tagging window, from its start, treated as dead
+DEAD_FRACTION = 1.0  # share of each Smart Tagging window, from its start, treated as dead
 
 def dead_mask(T: int, set_piece_intervals: Sequence[Interval]) -> BoolArray:
     """
@@ -24,11 +24,12 @@ def dead_mask(T: int, set_piece_intervals: Sequence[Interval]) -> BoolArray:
     for start, end in set_piece_intervals:
         if not 0 <= start <= end < T:
             raise ValueError(f"interval ({start}, {end}) is not inside [0, {T})")
+        mask[start : end + 1] = True
         
         # A Smart Tagging window is ~5s around the restart. 
         # Without ball velocity to find the exact kick, we approximate the restart 
         # as the midpoint of the window. The first half is dead, the second is live.
-        dead_end = start + int((end - start + 1) * DEAD_FRACTION)
-        mask[start:dead_end] = True
+        # dead_end = start + int((end - start + 1) * DEAD_FRACTION)
+        # mask[start:dead_end] = True
 
     return mask

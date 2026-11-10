@@ -17,7 +17,8 @@ tracking = load_tracking(cache)
 home, away = team_names(cache)
 
 tags = load_tags(home, away)
-set_piece_intervals = [(sp.start, sp.end) for sp in set_pieces(tags)]
+set_piece_intervals = [(sp.start, sp.start + (sp.end - sp.start) // 2 - 1)
+                        for sp in set_pieces(tags) if sp.end - sp.start >= 2]
 print("set pieces:", len(set_piece_intervals))
 
 _, lost = ball_clean(tracking.ball)
