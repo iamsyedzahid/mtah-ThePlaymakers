@@ -5,6 +5,8 @@ import numpy as np
 from mtah.interfaces import BoolArray, Interval
 from mtah.config import SECOND_HALF_D_BLOCK
 
+DEAD_FRACTION = 0.9  # share of each Smart Tagging window, from its start, treated as dead
+
 def dead_mask(T: int, set_piece_intervals: Sequence[Interval]) -> BoolArray:
     """
     Computes the dead-ball mask for the match based on tagged set piece windows.
@@ -26,9 +28,7 @@ def dead_mask(T: int, set_piece_intervals: Sequence[Interval]) -> BoolArray:
         # A Smart Tagging window is ~5s around the restart. 
         # Without ball velocity to find the exact kick, we approximate the restart 
         # as the midpoint of the window. The first half is dead, the second is live.
-        midpoint = start + (end - start) // 2
-        
-        # Mark only the part BEFORE the ball is put back in play as D
-        mask[start : midpoint] = True
+        dead_end = start + int((end - start + 1) * DEAD_FRACTION)
+        mask[start:dead_end] = True
 
     return mask

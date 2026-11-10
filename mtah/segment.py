@@ -5,7 +5,7 @@ import numpy as np
 from mtah.config import FPS
 from mtah.interfaces import A, AWAY, D, H, HOME, LABEL_DTYPE, BoolArray, FloatArray, LabelArray, Touch
 
-MIN_RUN_FRAMES = FPS  # shorter H/A runs are flicker
+MIN_RUN_FRAMES = 2 * FPS  # shorter H/A runs are flicker
 
 # ---- tunables (in units of "typical per-frame evidence magnitude") ----
 RECEPTION_TOL = 3          # frames either side of a reception where a flip is cheap
@@ -77,11 +77,11 @@ def segment(
 
     # --- normalise evidence scale ---
     e = np.nan_to_num(e, nan=0.0, posinf=0.0, neginf=0.0)
-    usable = ~lost & ~dead & (e != 0)
+    usable = ~dead & (e != 0)
     scale = np.median(np.abs(e[usable])) if usable.any() else 1.0
     if scale <= 0:
         scale = 1.0
-    ev = np.where(lost, 0.0, e / scale)
+    ev = e / scale   # lost frames now carry shape evidence, so don't zero them
 
     # --- reception proximity (soft window) ---
     near_reception = np.zeros(T, dtype=bool)
