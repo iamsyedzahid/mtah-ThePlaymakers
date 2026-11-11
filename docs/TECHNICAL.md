@@ -171,8 +171,9 @@ rule-only pipeline and on the earlier submitted version (spellF1 0.553 there, 17
   differently.
 - **2D only.** No ball height, so a ball in the air over a player can look close to him.
 
-With more time we would label more open matches, add set-piece and camera cues as learned features, and
-train on balls placed off the players the way ours are.
+With more time we would label more open matches (SkillCorner's open A-League tracking, for one), add
+set-piece and camera cues as learned features, train on balls placed off the players the way ours are,
+and try a sequence network over several seconds of context alongside the learned layer.
 
 ### Tried and dropped
 
