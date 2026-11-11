@@ -51,35 +51,28 @@ def test_segment_dead_mask_enforcement():
     assert np.all(labels[7:] == H)
 
 def test_segment_flip_on_reception():
-    """Test that a 'reception' touch allows possession to flip based on evidence."""
-    T = 20
-    # First 10 frames favor Home (+0.8), next 10 favor Away (-0.8)
-    e = np.concatenate([np.full(10, 0.8), np.full(10, -0.8)])
+    """A reception by the other team flips possession at its own frame."""
+    T = 200  # runs must be longer than MIN_RUN_FRAMES, or they are absorbed as flicker
+    e = np.concatenate([np.full(100, 0.8), np.full(100, -0.8)])
     lost = np.zeros(T, dtype=bool)
     dead = np.zeros(T, dtype=bool)
-    
-    # A valid reception touch occurs right as evidence flips
-    touches = [Touch(frame=10, team=AWAY, kind="reception")]
-    
+    touches = [Touch(frame=100, team=AWAY, kind="reception")]
+
     labels = segment(e, lost, dead, touches)
-    
-    assert np.all(labels[0:10] == H)
-    assert np.all(labels[10:] == A), "Possession should flip to Away after reception"
+
+    assert np.all(labels[0:100] == H)
+    assert np.all(labels[100:] == A), "Possession should flip to Away at the reception"
 
 def test_segment_no_flip_on_deflection():
-    """Test that a 'deflection' touch blocks possession from flipping."""
-    T = 20
-    # Evidence strongly shifts to Away...
-    e = np.concatenate([np.full(10, 0.8), np.full(10, -0.8)])
+    """A deflection never flips possession, whatever the evidence does."""
+    T = 200
+    e = np.concatenate([np.full(150, 0.8), np.full(50, -0.8)])
     lost = np.zeros(T, dtype=bool)
     dead = np.zeros(T, dtype=bool)
-    
-    # ...but it's only a deflection!
-    touches = [Touch(frame=10, team=AWAY, kind="deflection")]
-    
+    touches = [Touch(frame=150, team=AWAY, kind="deflection")]
+
     labels = segment(e, lost, dead, touches)
-    
-    # Viterbi switching penalty should prevent the flip
+
     assert np.all(labels == H), "Deflections should not allow possession flips"
 
 def test_segment_lost_mask_carries_possession():

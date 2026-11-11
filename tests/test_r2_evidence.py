@@ -548,7 +548,7 @@ def test_fusion_features_are_the_evidence_functions(big):
     X, names = rf.fusion_features(tr.ball, tr.players, tr.team, PITCH_M, [(0, tr.n_frames)])
     col = dict(zip(names, X.T))
     _, lost = ball_clean(tr.ball)
-    np.testing.assert_array_equal(col["r2_nearest"], ev.evidence(tr))
+    np.testing.assert_array_equal(col["r2_nearest"], ev.nearest_evidence(tr.ball, lost, tr.players, tr.team))
     np.testing.assert_array_equal(ev.logit_to_evidence(col["r2_reach_lead"] / ev.CONTROL_SCALE_S), ev.evidence_reach(tr))
     np.testing.assert_allclose(ev.logit_to_evidence(col["r2_shape_lost"]), ev.evidence_shape(tr), atol=1e-8)
     assert (col["r2_shape_lost"][~lost] == 0).all() and (col["r2_shape"][~lost] != 0).any()

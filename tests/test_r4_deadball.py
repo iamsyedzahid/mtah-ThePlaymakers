@@ -5,32 +5,16 @@ from unittest.mock import patch
 
 from mtah.deadball import dead_mask
 
-def test_dead_mask_set_piece_midpoint():
-    """Test that set piece intervals mark only the first half as dead (D)."""
+def test_dead_mask_marks_whole_intervals():
+    """Every frame of each inclusive interval is dead; trimming windows is the caller's job."""
     T = 200
-    # Interval 1: 50 to 60 (midpoint 55). Dead: 50-54. Live: 55-60.
-    # Interval 2: 100 to 150 (midpoint 125). Dead: 100-124. Live: 125-150.
     intervals = [(50, 60), (100, 150)]
-    
-    # Patch the config block to None so it doesn't interfere with this test
     with patch("mtah.deadball.SECOND_HALF_D_BLOCK", None):
         mask = dead_mask(T, intervals)
-        
-    assert mask.shape == (T,)
-    assert mask.dtype == bool
-    
-    # Verify first interval
-    assert np.all(mask[50:55]), "First half of interval 1 should be True"
-    assert not np.any(mask[55:61]), "Second half of interval 1 should be False"
-    
-    # Verify second interval
-    assert np.all(mask[100:125]), "First half of interval 2 should be True"
-    assert not np.any(mask[125:151]), "Second half of interval 2 should be False"
-    
-    # Verify outside frames are strictly False
-    assert not np.any(mask[0:50])
-    assert not np.any(mask[61:100])
-    assert not np.any(mask[151:])
+
+    assert mask.shape == (T,) and mask.dtype == bool
+    assert np.all(mask[50:61]) and np.all(mask[100:151])
+    assert not np.any(mask[0:50]) and not np.any(mask[61:100]) and not np.any(mask[151:])
 
 def test_dead_mask_with_config_block():
     """Test that the hardcoded second half block is applied correctly."""

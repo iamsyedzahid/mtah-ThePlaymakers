@@ -5,12 +5,7 @@ import numpy as np
 from mtah.config import FPS
 from mtah.interfaces import A, AWAY, D, H, HOME, LABEL_DTYPE, BoolArray, FloatArray, LabelArray, Touch
 
-MIN_RUN_FRAMES = 2 * FPS  # chosen on open games (Metrica x2 ball masks, DFL x7), not on our match
-
-# ---- tunables (in units of "typical per-frame evidence magnitude") ----
-RECEPTION_TOL = 3          # frames either side of a reception where a flip is cheap
-SWITCH_COST_AT_RECEPTION = 2.0
-SWITCH_COST_ELSEWHERE = 2.0 * FPS   # ~ two seconds of contrary evidence to flip with no touch
+MIN_RUN_FRAMES = 2 * FPS  # shorter H/A runs are flicker; 2 s chosen on open games, not on our match
 
 
 def run_bounds(labels: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -37,7 +32,6 @@ def _merge_short_runs(labels: np.ndarray) -> np.ndarray:
             left_ok = left is not None and left != D
             right_ok = right is not None and right != D
             if left_ok and right_ok:
-                # pick the longer neighbour
                 ll = ends[i - 1] - starts[i - 1]
                 rl = ends[i + 1] - starts[i + 1]
                 new = left if ll >= rl else right
@@ -60,7 +54,10 @@ def segment(
 ) -> LabelArray:
     """
     Turn evidence and touches into labels [T] in {H, A, D}. Never X.
-    Uses a 3-state Viterbi decoder with soft, reception-aware switching.
+
+    Possession flips only at a reception, at the reception's own frame, to that reception's team;
+    deflections never flip. It holds through lost frames. D is exactly the dead_mask frames. Before
+    the first reception the team is the sign of the evidence up to it. Short H/A runs are absorbed.
     """
     e = np.asarray(e, dtype=float)
     lost = np.asarray(lost_mask, dtype=bool)
@@ -75,55 +72,30 @@ def segment(
     if T == 0:
         return np.full(0, H, dtype=LABEL_DTYPE)
 
-    # --- normalise evidence scale ---
     e = np.nan_to_num(e, nan=0.0, posinf=0.0, neginf=0.0)
     usable = ~dead & (e != 0)
-    scale = np.median(np.abs(e[usable])) if usable.any() else 1.0
-    if scale <= 0:
-        scale = 1.0
-    ev = e / scale   # lost frames now carry shape evidence, so don't zero them
+    receptions = sorted((t for t in touches if t.kind == "reception"), key=lambda t: t.frame)
 
-    # --- reception proximity (soft window) ---
-    near_reception = np.zeros(T, dtype=bool)
-    for t in touches:
-        if t.kind == "reception":
-            lo = max(0, t.frame - RECEPTION_TOL)
-            hi = min(T, t.frame + RECEPTION_TOL + 1)
-            near_reception[lo:hi] = True
+    # who has the ball before the first reception
+    first = receptions[0].frame if receptions else T
+    pre = usable[:first]
+    if pre.any():
+        home = float(e[:first][pre].sum()) >= -1e-9
+    elif receptions:
+        home = receptions[0].team == HOME
+    else:
+        home = True
 
-    # States: 0=H, 1=A, 2=D
-    NEG = -1e18  # finite "forbidden" so we never get all -inf paths
-    V = np.full((T, 3), NEG)
-    B = np.zeros((T, 3), dtype=int)
+    is_home = np.empty(T, dtype=bool)
+    prev = 0
+    for r in receptions:
+        new = r.team == HOME
+        if new == home:
+            continue
+        is_home[prev : r.frame] = home
+        prev, home = r.frame, new
+    is_home[prev:] = home
 
-    def obs(t: int) -> np.ndarray:
-        if dead[t]:
-            return np.array([NEG, NEG, 0.0])
-        return np.array([ev[t], -ev[t], NEG])
-
-    V[0] = obs(0)
-
-    for t in range(1, T):
-        o = obs(t)
-        sw = SWITCH_COST_AT_RECEPTION if near_reception[t] else SWITCH_COST_ELSEWHERE
-
-        # trans[prev, curr] = additive cost
-        trans = np.zeros((3, 3))
-        trans[0, 1] = trans[1, 0] = -sw       # H<->A flip
-        # D -> H/A (restart) and H/A -> D (dead ball) are free;
-        # D membership itself is enforced through obs()
-
-        cand = V[t - 1][:, None] + trans + o[None, :]   # [prev, curr]
-        B[t] = np.argmax(cand, axis=0)
-        V[t] = cand[B[t], np.arange(3)]
-
-    states = np.zeros(T, dtype=int)
-    states[-1] = int(np.argmax(V[-1]))
-    for t in range(T - 1, 0, -1):
-        states[t - 1] = B[t, states[t]]
-
-    labels = np.full(T, H, dtype=LABEL_DTYPE)
-    labels[states == 1] = A
-    labels[states == 2] = D
-
+    labels = np.where(is_home, H, A).astype(LABEL_DTYPE)
+    labels[dead] = D
     return _merge_short_runs(labels)

@@ -113,9 +113,12 @@ class ShapeModel(NamedTuple):
 # -- evidence functions -------------------------------------------------------------------------
 
 def evidence(tracking: Tracking) -> FloatArray:
+    """The nearest player's team on trusted frames, plus the calibrated team-shape evidence on lost
+    frames, where the first is exactly 0. The two never overlap, so the sum stays in [-1, 1]."""
     _check_fps(tracking)
     _, lost = ball_clean(tracking.ball)
-    return nearest_evidence(tracking.ball, lost, tracking.players, tracking.team)
+    return (nearest_evidence(tracking.ball, lost, tracking.players, tracking.team)
+            + evidence_shape_calibrated(tracking))
 
 
 def nearest_evidence(ball: FloatArray, lost: BoolArray, players: FloatArray, team: np.ndarray) -> FloatArray:
