@@ -3,7 +3,7 @@
 Chosen on two labelled benchmarks of other matches, which the rules allow: Metrica's three open games
 (mtah/opengames.py, labels from their events) and seven DFL Bundesliga matches (mtah/dfl.py, labels
 from tracking ownership like our ground truth). Trained on both, with each match held out in turn, it
-scores spellF1 0.658 on Metrica's games and 0.520 on the DFL matches. Built from ideas pooled across
+scores a mean spellF1 of 0.573 over the ten (0.505 with the ball displaced like ours). Built from ideas pooled across
 team forks and from the team's own modules (R2's evidence, R3's receptions); see docs/TECHNICAL.md.
 
 Inputs are plain arrays in metres, x in [0, L], y in [0, W]: ball [T, 2] and players [T, S, 2] with NaN
@@ -36,7 +36,7 @@ from mtah.r2_features import fusion_features
 from mtah.touches import touches
 
 H, A, D, X = 0, 1, 2, 3
-W_RULE, W_LEARNED = 1.0, 0.5
+W_RULE, W_LEARNED = 1.0, 0.7  # 0.7 over 0.5 with the teammates' columns in: +0.012 spellF1 (8 of 10 held out)
 SWITCH_TEAM, SWITCH_DEAD = 14.0, 30.0
 MISSING = -1.0  # how a missing feature value reaches the learned layer, in training and in use
 SHAPE_WEIGHT = 0.6  # R2's shape logit on lost frames, clipped to +-2, joins the team evidence at this weight

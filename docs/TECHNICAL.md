@@ -123,9 +123,13 @@ match, with a bootstrap range for the mean gain.
 |---|---|---|
 | R2's shape model only | +0.010, better on 8 of 10 | +0.009, better on 7 of 10 |
 | R2's shape model and R3's receptions | +0.017, 9 of 10 (range +0.010 to +0.024) | +0.011, 9 of 10 (+0.005 to +0.018) |
-| **R2's shape model, R2's and R3's inputs (submitted)** | **+0.019, 10 of 10 (+0.011 to +0.028)** | **+0.020, 9 of 10 (+0.012 to +0.029)** |
+| R2's shape model, R2's and R3's inputs | +0.019, 10 of 10 (+0.011 to +0.028) | +0.020, 9 of 10 (+0.012 to +0.029) |
+| **Then the learned layer's weight 0.5 → 0.7 (submitted)** | **+0.012, 8 of 10 (+0.006 to +0.017)** | **+0.006, 8 of 10 (+0.002 to +0.009)** |
 
-The submitted version scores 0.658 on Metrica's three games and 0.520 on the seven DFL matches.
+With the new inputs in, the decoding settings were searched again (switch costs 10/14/20 and 20/30/45,
+learned weight 0.5/0.7): weight 0.7 gained at almost every switch cost, and the switch costs stayed as
+they were. The ten-match mean is 0.573 as trained and 0.505 with the ball displaced, against 0.543 and
+0.479 before the team's modules went in.
 
 **Short possessions are kept.** An earlier version merged possessions under 2 s into their neighbours,
 as a guard in case our ground truth was less fragmented than event labels. The DFL labels answered that:
@@ -209,10 +213,10 @@ Metrica), and merging possessions under 2 s (see above).
 
 | | Value |
 |---|---|
-| Benchmark, held out in turn, spellF1 | Metrica 0.658, DFL 0.520 |
-| Graded frames, H / A / D | 36.9% / 28.0% / 35.1% |
-| Possessions in the graded halves | 389 (195 and 194), 3.67 a minute, median 6.2 s |
-| SHA-256 of the submission file | `2d90fff543cdf29a6ea15c444a79c5c9969fa35ec0bb682afb2f365b631d0f62` |
+| Benchmark, ten matches held out in turn, spellF1 | 0.573 (0.505 with the ball displaced) |
+| Graded frames, H / A / D | (to fill from the real-match run) |
+| Possessions in the graded halves | (to fill from the real-match run) |
+| SHA-256 of the submission file | (to fill from the real-match run) |
 
 ## Reproduction
 
