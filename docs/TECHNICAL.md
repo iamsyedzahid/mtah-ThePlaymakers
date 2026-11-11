@@ -176,9 +176,10 @@ train on balls placed off the players the way ours are.
 
 ### Tried and dropped
 
-Our earlier rule-only pipeline remains in the repository (`run.py --real --rules`), with its own
-evidence, touch detection, dead-ball rules (set-piece tags, untagged stoppages, slow players, a still
-camera) and possession decoding. It scored 0.496 on the Metrica benchmark. Within it:
+Our earlier rule-only pipeline remains in the repository (`run.py --real --rules`), with R2's
+evidence, R3's touch detection, dead-ball rules (set-piece tags, untagged stoppages, slow players, a
+still camera) and possession decoding. It scored 0.496 on the Metrica benchmark and 0.351 on the DFL
+matches. Within it:
 
 - Two evidence variants, `evidence_weighted` and `evidence_speed_aware`, did no better.
 - Team spread inside ball gaps scored an AUC of 0.70-0.73 against the pipeline's own output, but as a
@@ -188,6 +189,12 @@ camera) and possession decoding. It scored 0.496 on the Metrica benchmark. Withi
   (20 m).
 - Forcing that pipeline's dead-ball cues into the submitted one changed spellF1 by -0.007 on the
   Metrica benchmark, so they were left out.
+- A simpler decoder (R4's: possession flips at every reception by the other team, possessions under
+  2 s merged) gained 0.041 on Metrica's games and 0.064 with the ball displaced, but lost 0.027 on
+  every one of the seven DFL matches. Most of that is the 2 s merge: ours with it gained 0.030 and
+  0.068 on Metrica and lost 0.022 on the DFL matches (0 of 7), the same split as in the submitted
+  pipeline, so both were dropped. Keeping R2's shape evidence on lost frames in the decoder gained
+  0.005 on the DFL matches (6 of 7) but lost 0.014 on Metrica's (0 of 3).
 
 In the submitted pipeline: training on Metrica only, training on the DFL matches only (0.634 on
 Metrica), and merging possessions under 2 s (see above).
