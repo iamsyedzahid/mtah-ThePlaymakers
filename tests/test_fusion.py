@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 
 from mtah import fusion
-from mtah.config import FPS, PITCH_M
+from mtah.config import PITCH_M
 from mtah.interfaces import A, D, H
 from mtah.synthetic import make_synthetic
 
@@ -66,37 +66,30 @@ def test_learned_layer_is_deterministic_and_team_symmetric(model):
     again = fusion.train([_game(8_000, 11), _game(8_000, 12)])
     def logp(m, team):
         f = fusion.frame_features(g["ball"], g["players"], team, g["pitch"])
-        extra = fusion.extra_columns(fusion.team_inputs(g["ball"], g["players"], team, g["pitch"], g["halves"]))
-        return fusion.learned_logp(m, f, g["players"], team, g["pitch"], g["halves"], extra)
+        cols = fusion.team_columns(g["ball"], g["players"], team, g["pitch"], g["halves"])
+        return fusion.learned_logp(m, f, g["players"], team, g["pitch"], g["halves"], cols)
 
     p1 = logp(model, g["team"])
     np.testing.assert_array_equal(p1, logp(again, g["team"]))
     np.testing.assert_allclose(logp(model, 1 - g["team"])[:, [1, 0, 2]], p1, atol=1e-9)
 
 
-def test_teammate_inputs_change_sign_with_the_teams():
+def test_teammate_columns_change_sign_with_the_teams():
     g = _game(4_000, 6)
-    straight = fusion.extra_columns(fusion.team_inputs(g["ball"], g["players"], g["team"], g["pitch"], g["halves"]))
-    swapped = fusion.extra_columns(fusion.team_inputs(g["ball"], g["players"], 1 - g["team"], g["pitch"], g["halves"]))
-    cols, signs = straight
-    assert cols.shape == (4_000, 7) and np.isfinite(cols).all()
-    np.testing.assert_allclose(swapped[0], cols * signs, atol=1e-9)
+    cols = fusion.team_columns(g["ball"], g["players"], g["team"], g["pitch"], g["halves"])
+    swapped = fusion.team_columns(g["ball"], g["players"], 1 - g["team"], g["pitch"], g["halves"])
+    assert cols.shape == (4_000, len(fusion.TEAM_COLUMNS)) and np.isfinite(cols).all()
+    np.testing.assert_allclose(swapped, cols * fusion.TEAM_COLUMN_SIGNS, atol=1e-9)
 
 
 def test_learned_features_have_no_missing_values(syn):
     tr = syn.tracking
+    halves = [(0, tr.n_frames)]
     f = fusion.frame_features(tr.ball, tr.players, tr.team, PITCH_M)
-    feats, names = fusion.learned_features(f, tr.players, tr.team, PITCH_M, [(0, tr.n_frames)])
+    cols = fusion.team_columns(tr.ball, tr.players, tr.team, PITCH_M, halves)
+    feats, names = fusion.learned_features(f, tr.players, tr.team, PITCH_M, halves, cols)
     assert np.isfinite(feats).all() and feats.shape == (tr.n_frames, len(names))
-
-
-def test_short_possession_between_the_other_team_is_merged():
-    path = np.array([0] * 100 + [1] * (2 * FPS - 1) + [0] * 100, dtype=np.int8)
-    assert (fusion.absorb_short(path) == 0).all()
-    kept = np.array([0] * 100 + [1] * (2 * FPS) + [0] * 100, dtype=np.int8)
-    np.testing.assert_array_equal(fusion.absorb_short(kept), kept)
-    across_dead = np.array([0] * 100 + [2] * 10 + [1] * 20 + [0] * 100, dtype=np.int8)
-    np.testing.assert_array_equal(fusion.absorb_short(across_dead), across_dead)
+    assert names[-len(fusion.TEAM_COLUMNS):] == list(fusion.TEAM_COLUMNS)
 
 
 def test_viterbi_does_not_flicker():

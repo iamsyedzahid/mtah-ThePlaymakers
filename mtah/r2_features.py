@@ -8,12 +8,12 @@ Columns (FEATURE_NAMES), every one home-positive:
                     mtah/evidence.py on the ball given. [-1, 1]; 0 where ball_clean calls the ball
                     lost or nobody is tracked.
     r2_reach_lead   seconds by which home's best player beats away's to the ball, both moving
-                    (evidence_reach's time lead). [-10, 10]; 0 where lost or a team is untracked.
+                    (evidence.time_lead). [-10, 10]; 0 where lost or a team is untracked.
     r2_shape        the half's own shape model: logit of p_home from team shape alone, fitted on
                     that half's clear contacts (pseudo-labels, no labels). On every frame of the
                     half with both teams tracked; 0 outside the halves, and in a half with fewer
                     than 100 clear contacts per team. Capped at +-SHAPE_LOGIT_CAP.
-    r2_shape_lost   r2_shape on lost frames only, 0 elsewhere: what evidence_shape adds.
+    r2_shape_lost   r2_shape on lost frames only, 0 elsewhere: what fusion adds to its rules there.
 
 Calling again with 1 - team gives exactly -X, bit for bit, so the swapped orientation is free.
 There is no NaN and no infinity: 0 means no information, as for evidence. (NaN would become -1 in

@@ -195,6 +195,11 @@ matches. Within it:
   0.068 on Metrica and lost 0.022 on the DFL matches (0 of 7), the same split as in the submitted
   pipeline, so both were dropped. Keeping R2's shape evidence on lost frames in the decoder gained
   0.005 on the DFL matches (6 of 7) but lost 0.014 on Metrica's (0 of 3).
+- R2's time-to-ball evidence and calibrated versions of both tied with the nearest player on
+  Metrica's games (0.39 against 0.40-0.42), so the simpler one stays here; the time-to-ball lead is
+  a learned-layer input in the submitted pipeline instead.
+- Abstaining (X) inside possessions: an X is a miss under macroF1 and gains nothing under spellF1,
+  so neither pipeline writes one inside the graded halves.
 
 In the submitted pipeline: training on Metrica only, training on the DFL matches only (0.634 on
 Metrica), and merging possessions under 2 s (see above).

@@ -206,22 +206,3 @@ def segment(
     - no flicker: very short H/A runs are absorbed by a neighbour.
     """
     raise NotImplementedError("contract only; see mtah/segment.py")
-
-
-def to_x_policy(
-    labels: LabelArray,
-    confidence: FloatArray | None = None,
-    threshold: float = 0.5,
-    margin: int = FPS,
-) -> LabelArray:
-    """Replace low-confidence frames with X, but only in the middle of a possession.
-
-    Not used by run.predict, which never abstains: an X is a miss under macroF1 and gains nothing
-    under spellF1. Kept for anyone who wants to try abstaining.
-
-    spellF1 fills an X with the last label in the half, so an X inside a run is free, while an X
-    at the start of a run delays the hand-over. So X only replaces an H or A frame at least
-    `margin` frames from both ends of its run, and never a D. With confidence=None the labels
-    come back unchanged.
-    """
-    raise NotImplementedError("contract only; see mtah/xpolicy.py")

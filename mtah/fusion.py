@@ -3,47 +3,50 @@
 Chosen on two labelled benchmarks of other matches, which the rules allow: Metrica's three open games
 (mtah/opengames.py, labels from their events) and seven DFL Bundesliga matches (mtah/dfl.py, labels
 from tracking ownership like our ground truth). Trained on both, with each match held out in turn, it
-scores spellF1 0.652 on Metrica's games and 0.496 on the DFL matches, against 0.507 and 0.361 for the
-rules alone. Built from ideas pooled across team forks; see docs/TECHNICAL.md.
+scores spellF1 0.658 on Metrica's games and 0.520 on the DFL matches. Built from ideas pooled across
+team forks and from the team's own modules (R2's evidence, R3's receptions); see docs/TECHNICAL.md.
 
 Inputs are plain arrays in metres, x in [0, L], y in [0, W]: ball [T, 2] and players [T, S, 2] with NaN
 where unseen, team [S] with 0 = home. Output codes [T]: 0 = H, 1 = A, 2 = D, 3 = X (outside the halves).
 
 1. Features (`frame_features`): the ball with impossible jumps removed and gaps up to 0.5 s filled;
    each team's nearest and second-nearest distance to it; ball speed; mean player speed; how far the
-   ball is outside the pitch; each team's centroid and spread.
+   ball is outside the pitch; each team's mean x.
 2. Team evidence (`team_logodds`): the nearest-distance difference, weighted down when nobody is near
-   and when the ball flies. With the ball missing, a shape model (`shape_logodds`) takes over: a
+   and when the ball flies. With the ball missing, R2's shape model takes over (`team_columns`): a
    logistic model on team shape, fitted per half on that half's own clear contacts (pseudo-labels).
 3. Dead-ball evidence (`dead_llr`): ball off the pitch, a resting ball among slow players, a missing
    ball among slow players, and a two-group fit of collective player speed per half (slow and fast,
    with no fixed threshold). A missing ball alone is never dead.
-4. Learned layer (`train`, `learned_logp`): a gradient-boosted classifier on windowed features, trained
-   on the open games with home and away swapped as well, and applied both ways round and averaged, so it
-   cannot favour either team. Missing values are filled the same way in training and in use.
+4. Learned layer (`train`, `learned_logp`): a gradient-boosted classifier on windowed features and on
+   R2's and R3's per-frame columns (`team_columns`), trained on the open games with home and away
+   swapped as well, and applied both ways round and averaged, so it cannot favour either team. Missing
+   values are filled the same way in training and in use.
 5. Decoding (`label`): one Viterbi pass per half over H, A and D with switch costs. Short possessions
    are kept: tracking-derived labels are fragmented (DFL: 38-50% of possessions under 3 s), and merging
-   those under 2 s cost 0.02 on all seven DFL matches. `absorb_short` stays for anyone who wants it.
+   those under 2 s cost 0.02 on all seven DFL matches.
 
 Every fitted step is deterministic: fixed seeds, and callers run it on one thread (run.py).
 """
 import numpy as np
 
 from mtah.config import FPS
+from mtah.r2_features import FEATURE_NAMES as R2_COLUMNS
+from mtah.r2_features import fusion_features
+from mtah.touches import touches
 
 H, A, D, X = 0, 1, 2, 3
-MIN_SPELL_FRAMES = 0  # no merge: 2 s cost 0.02 on the DFL matches and 0.039 on Metrica's
 W_RULE, W_LEARNED = 1.0, 0.5
 SWITCH_TEAM, SWITCH_DEAD = 14.0, 30.0
 MISSING = -1.0  # how a missing feature value reaches the learned layer, in training and in use
-SHAPE_WEIGHT = 0.6
+SHAPE_WEIGHT = 0.6  # R2's shape logit on lost frames, clipped to +-2, joins the team evidence at this weight
 
-# Teammates' signals (team_inputs). Held out on the ten open matches, R2's shape model plus both their
-# input sets gained +0.019 spellF1 as trained (better on 10/10) and +0.020 with the ball displaced (9/10).
-SHAPE_SOURCE = "r2"  # "r2": R2's per-half shape model on lost frames; "ours": the earlier one
-EXTRA: tuple[str, ...] = ("r2", "r3")  # learned-layer inputs: "r2" (R2's four columns), "r3" (R3's receptions)
-R2_SHAPE_COLUMN = 2  # "r2_shape" in mtah/r2_features.FEATURE_NAMES
-TEAM_INPUT_SIGNS = {"r2": np.array([-1.0, -1.0, -1.0, -1.0]), "r3": np.array([-1.0, 1.0, -1.0])}
+# The teammates' per-frame columns (team_columns). Held out on the ten open matches, R2's shape model
+# plus these columns gained +0.019 spellF1 as trained (better on 10 of 10) and +0.020 with the ball
+# displaced like ours (9 of 10), against the same pipeline without them.
+TEAM_COLUMNS = (*R2_COLUMNS, "r3_last_team", "r3_since_s", "r3_balance")
+TEAM_COLUMN_SIGNS = np.array([-1.0, -1.0, -1.0, -1.0, -1.0, 1.0, -1.0])  # under a team swap
+R2_SHAPE_COLUMN = TEAM_COLUMNS.index("r2_shape")
 R3_SINCE_CAP_S = 30.0
 R3_BALANCE_S = 10.0
 
@@ -122,18 +125,14 @@ def frame_features(ball, players, team, pitch):
             warnings.simplefilter("ignore")
             pspeed = _roll_mean(np.nanmean(step, axis=1), 12) if np.isfinite(step).any() else np.full(T, np.nan)
 
-            def shape(side):
-                px, py = players[:, team == side, 0], players[:, team == side, 1]
-                return np.nanmean(px, axis=1), np.nanstd(px, axis=1), np.nanstd(py, axis=1)
-
-            hx, hsx, hsy = shape(0)
-            ax, asx, asy = shape(1)
+            hx = np.nanmean(players[:, team == 0, 0], axis=1)  # each team's mean x
+            ax = np.nanmean(players[:, team == 1, 0], axis=1)
 
     out_m = np.maximum.reduce([-bc[:, 0], bc[:, 0] - length, -bc[:, 1], bc[:, 1] - width])
     out_m[np.logical_not(vis)] = np.nan
     n_vis = np.isfinite(players[:, :, 0]).sum(1)
     return dict(bc=bc, seen=seen, vis=vis, d1h=d1h, d1a=d1a, d2h=d2h, d2a=d2a, bspeed=bspeed,
-                pspeed=pspeed, out_m=out_m, hx=hx, hsx=hsx, hsy=hsy, ax=ax, asx=asx, asy=asy, n_vis=n_vis)
+                pspeed=pspeed, out_m=out_m, hx=hx, ax=ax, n_vis=n_vis)
 
 
 def _two_groups(x, iters=40):
@@ -156,28 +155,6 @@ def team_logodds(f, scale=1.8, clip=3.0, fast=10.0):
     reach = np.exp(-np.nan_to_num(np.fmin(f["d1h"], f["d1a"]), nan=50.0) / 7.0)
     damp = np.where(np.nan_to_num(f["bspeed"], nan=0) > fast, 0.2, 1.0)
     return np.nan_to_num(lo * reach * damp, nan=0.0)
-
-
-def shape_logodds(f, halves, weight=0.6):
-    """Ball-free evidence: per half, a logistic model on team shape fitted on that half's clear contacts."""
-    from sklearn.linear_model import LogisticRegression
-
-    out = np.zeros(len(f["vis"]))
-    for lo, hi in halves:
-        part = slice(lo, hi)
-        feats = np.column_stack([f["hx"], f["ax"], f["hsx"], f["asx"], f["hsy"], f["asy"], f["hx"] - f["ax"]])[part]
-        d1h, d1a = f["d1h"][part], f["d1a"][part]
-        y = np.where((d1h < 1.5) & (d1a > 3.0), 1, np.where((d1a < 1.5) & (d1h > 3.0), 0, -1))
-        ok = np.isfinite(feats).all(1)
-        train = ok & (y >= 0)
-        if train.sum() < 200 or len(np.unique(y[train])) < 2:
-            continue
-        mu, sd = feats[train].mean(0), feats[train].std(0) + 1e-6
-        model = LogisticRegression(C=0.5, max_iter=300).fit((feats[train] - mu) / sd, y[train])
-        z = np.zeros(hi - lo)
-        z[ok] = model.decision_function((feats[ok] - mu) / sd)
-        out[part] = np.clip(z, -2, 2) * weight
-    return out
 
 
 def dead_llr(f, halves):
@@ -203,30 +180,22 @@ def dead_llr(f, halves):
     return llr
 
 
-def team_inputs(ball, players, team, pitch, halves):
-    """The teammates' per-frame signals the options below ask for: {"r2": [T, 4], "r3": [T, 3]}.
+def team_columns(ball, players, team, pitch, halves):
+    """[T, 7] per-frame columns from the teammates' modules, named in TEAM_COLUMNS.
 
-    "r2": R2's fusion_features (mtah/r2_features.py): nearest-player evidence, time-to-ball lead, and
-    the half's own shape-model logit on every frame and on lost frames. "r3": from R3's receptions
-    (mtah/touches.py), see r3_columns. Every column is home-positive except r3's "since", so swapping
-    the teams negates all but that one (TEAM_INPUT_SIGNS).
+    R2's four (mtah/r2_features.py): nearest-player evidence, time-to-ball lead, and the half's own
+    shape-model logit on every frame and on lost frames. R3's three (mtah/touches.py), see r3_columns.
+    Every column is home-positive except R3's "seconds since", so swapping the teams negates all but
+    that one (TEAM_COLUMN_SIGNS).
     """
-    out = {}
-    if SHAPE_SOURCE == "r2" or "r2" in EXTRA:
-        from mtah.r2_features import fusion_features
-
-        out["r2"] = np.asarray(fusion_features(ball, players, team, pitch, halves)[0], dtype=float)
-    if "r3" in EXTRA:
-        out["r3"] = r3_columns(ball, players, team, halves)
-    return out
+    r2 = np.asarray(fusion_features(ball, players, team, pitch, halves)[0], dtype=float)
+    return np.column_stack([r2, r3_columns(ball, players, team, halves)])
 
 
 def r3_columns(ball, players, team, halves):
     """[T, 3] from R3's receptions (deflections never flip possession): +1/-1 for the team that made the
     half's latest reception (0 before the first), seconds since it (capped), and home minus away
     receptions over the last R3_BALANCE_S."""
-    from mtah.touches import touches
-
     T = len(ball)
     receptions = [e for e in touches(ball, players, team) if e.kind == "reception"]
     signed = np.zeros(T)
@@ -247,18 +216,9 @@ def r3_columns(ball, players, team, halves):
     return np.column_stack([last, since, balance])
 
 
-def extra_columns(inputs):
-    """(columns, sign under a team swap) for EXTRA, in its order; None when EXTRA is empty."""
-    if not EXTRA:
-        return None
-    cols = [inputs[name] for name in EXTRA]
-    signs = [TEAM_INPUT_SIGNS[name] for name in EXTRA]
-    return np.column_stack(cols), np.concatenate(signs)
-
-
-def learned_features(f, players, team, pitch, halves, swap=False, extra=None):
-    """The learned layer's inputs. swap=True exchanges home and away (labels must be swapped too).
-    extra: optional (columns, signs) from extra_columns, appended after ours."""
+def learned_features(f, players, team, pitch, halves, team_cols, swap=False):
+    """The learned layer's inputs: ours, then team_cols from team_columns. swap=True exchanges home and
+    away (labels must be swapped too)."""
     length, width = pitch
     T = len(f["vis"])
     d1h, d1a, d2h, d2a = (f["d1a"], f["d1h"], f["d2a"], f["d2h"]) if swap else (f["d1h"], f["d1a"], f["d2h"], f["d2a"])
@@ -282,11 +242,8 @@ def learned_features(f, players, team, pitch, halves, swap=False, extra=None):
     cols["shape_dx"] = (f["ax"] - f["hx"]) * (-1 if swap else 1) * sign
     names = sorted(cols)
     feats = np.nan_to_num(np.column_stack([np.asarray(cols[n], float) for n in names]), nan=MISSING)
-    if extra is not None:
-        more, signs = extra
-        feats = np.column_stack([feats, more * signs if swap else more])
-        names = names + [f"extra{k}" for k in range(more.shape[1])]
-    return feats, names
+    feats = np.column_stack([feats, team_cols * TEAM_COLUMN_SIGNS if swap else team_cols])
+    return feats, names + list(TEAM_COLUMNS)
 
 
 def swap_codes(codes):
@@ -298,10 +255,10 @@ def swap_codes(codes):
 def training_rows(gm):
     """One game's (features, codes) pairs, as it is and with home and away swapped. Graded frames only."""
     f = frame_features(gm["ball"], gm["players"], gm["team"], gm["pitch"])
-    extra = extra_columns(team_inputs(gm["ball"], gm["players"], gm["team"], gm["pitch"], gm["halves"])) if EXTRA else None
+    team_cols = team_columns(gm["ball"], gm["players"], gm["team"], gm["pitch"], gm["halves"])
     rows = []
     for swap in (False, True):
-        feats, _ = learned_features(f, gm["players"], gm["team"], gm["pitch"], gm["halves"], swap=swap, extra=extra)
+        feats, _ = learned_features(f, gm["players"], gm["team"], gm["pitch"], gm["halves"], team_cols, swap=swap)
         y = swap_codes(gm["codes"]) if swap else gm["codes"]
         keep = y != X
         rows.append((feats[keep], y[keep]))
@@ -322,10 +279,10 @@ def train(games):
     return fit([r for gm in games for r in training_rows(gm)])
 
 
-def learned_logp(model, f, players, team, pitch, halves, extra=None):
+def learned_logp(model, f, players, team, pitch, halves, team_cols):
     """Log-probabilities [T, 3] for H, A, D, averaged over both team orientations."""
-    straight, _ = learned_features(f, players, team, pitch, halves, swap=False, extra=extra)
-    swapped, _ = learned_features(f, players, team, pitch, halves, swap=True, extra=extra)
+    straight, _ = learned_features(f, players, team, pitch, halves, team_cols)
+    swapped, _ = learned_features(f, players, team, pitch, halves, team_cols, swap=True)
     p = 0.5 * (model.predict_proba(straight) + model.predict_proba(swapped)[:, [1, 0, 2]])
     return np.log(np.clip(p, 1e-4, 1))
 
@@ -349,20 +306,7 @@ def viterbi(score, switch_team=SWITCH_TEAM, switch_dead=SWITCH_DEAD):
     return path
 
 
-def absorb_short(path, min_frames=2 * FPS):
-    """A possession under min_frames between two of the other team's, with no dead ball between, joins them."""
-    p = path.copy()
-    change = np.flatnonzero(np.diff(p)) + 1
-    starts, ends = np.concatenate(([0], change)), np.concatenate((change, [len(p)]))
-    for k in range(1, len(starts) - 1):
-        s, e = starts[k], ends[k]
-        cur, prev, nxt = p[s], p[starts[k - 1]], p[starts[k + 1]]
-        if cur in (H, A) and prev == nxt and prev in (H, A) and prev != cur and e - s < min_frames:
-            p[s:e] = prev
-    return p
-
-
-def label(ball, players, team, pitch, halves, model=None, known_dead=None, min_spell=MIN_SPELL_FRAMES):
+def label(ball, players, team, pitch, halves, model=None, known_dead=None):
     """Codes [T]: 0 H, 1 A, 2 D inside halves ([start, end) pairs), 3 X outside them.
 
     known_dead: optional bool [T], frames that are D by a published fact (the second-half block).
@@ -370,21 +314,17 @@ def label(ball, players, team, pitch, halves, model=None, known_dead=None, min_s
     ball, players, team = np.asarray(ball, float), np.asarray(players, float), np.asarray(team)
     T = len(ball)
     f = frame_features(ball, players, team, pitch)
-    inputs = team_inputs(ball, players, team, pitch, halves) if (SHAPE_SOURCE == "r2" or EXTRA) else {}
-    if SHAPE_SOURCE == "r2":  # R2's per-half shape model, scaled exactly as ours is
-        shape = np.clip(inputs["r2"][:, R2_SHAPE_COLUMN], -2, 2) * SHAPE_WEIGHT
-    else:
-        shape = shape_logodds(f, halves, SHAPE_WEIGHT)
+    team_cols = team_columns(ball, players, team, pitch, halves)
+    shape = np.clip(team_cols[:, R2_SHAPE_COLUMN], -2, 2) * SHAPE_WEIGHT
     lo = team_logodds(f) + shape * np.logical_not(f["vis"])
     score = np.zeros((T, 3))
     score[:, H], score[:, A] = W_RULE * lo / 2, -W_RULE * lo / 2
     score[:, D] = W_RULE * dead_llr(f, halves)
     if model is not None:
-        score += W_LEARNED * learned_logp(model, f, players, team, pitch, halves, extra_columns(inputs) if EXTRA else None)
+        score += W_LEARNED * learned_logp(model, f, players, team, pitch, halves, team_cols)
     if known_dead is not None:
         score[known_dead] = [-50, -50, 50]
     codes = np.full(T, X, np.int8)
     for a, b in halves:
-        path = viterbi(score[a:b])
-        codes[a:b] = absorb_short(path, min_spell) if min_spell > 0 else path
+        codes[a:b] = viterbi(score[a:b])
     return codes

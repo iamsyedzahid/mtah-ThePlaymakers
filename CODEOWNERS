@@ -7,7 +7,7 @@
 #                          cleaning, lost_mask, gap stats (numbers only).
 #   R2  Evidence           evidence
 #   R3  Touches & tagging  touches, tagging
-#   R4  Segmentation       segment, deadball, xpolicy
+#   R4  Segmentation       segment, deadball, fusion
 #   R5  Tooling & docs     scripts, tests, run.py, docs
 
 *.md                    @ThePlaymakers/r5
@@ -19,9 +19,6 @@
 /mtah/config.py         @iamsyedzahid
 
 /mtah/evidence.py       @SMAWAHID
-/mtah/evidence_fit.py   @SMAWAHID
-/mtah/metrica_games.py  @SMAWAHID
-/mtah/dfl_games.py      @SMAWAHID
 /mtah/r2_features.py    @SMAWAHID
 
 /mtah/touches.py        @Abdullah-Sonija
@@ -29,7 +26,6 @@
 
 /mtah/segment.py        @ThePlaymakers/r4
 /mtah/deadball.py       @ThePlaymakers/r4
-/mtah/xpolicy.py        @ThePlaymakers/r4
 /mtah/fusion.py         @ThePlaymakers/r4
 
 /mtah/opengames.py      @ThePlaymakers/r5

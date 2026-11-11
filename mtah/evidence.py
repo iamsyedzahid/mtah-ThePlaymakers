@@ -1,54 +1,40 @@
 """Possession evidence (R2).
 
-Every function here has the signature of interfaces.evidence: Tracking in, e [T] float in [-1, 1]
-out, positive for home, always finite.
+evidence: the rule-only pipeline's team evidence (run.predict). Tracking in, e [T] float in [-1, 1]
+    out, positive for home, always finite, exactly 0 where ball_clean's lost_mask is True: the
+    nearest player's team, weighted by exp(-distance / SIGMA_M). R2 chose it by leave-one-game-out
+    spellF1 on Metrica's open games, ball masked and displaced like ours: nearest 0.40-0.42 against
+    0.39 for the best time-to-ball variant, and calibrating either was a tie, so the simpler one
+    stays. (The tuning code, mtah/evidence_fit.py, and the variants that lost are in the history.)
 
-evidence_reach: time-to-ball control, exactly 0 where ball_clean's lost_mask is True. Each player's
-    time to reach the ball is a reaction time plus a straight run at MAX_RUN_MS from where their
-    current velocity carries them during the reaction, to where the ball's own velocity carries
-    it in the same time (a simple pitch-control model, after Spearman 2018). Moving the ball
-    matters: with a still ball, a dribbler running with it is projected metres past it and loses
-    it to a defender standing alongside (measured on the Metrica games: sign accuracy at dribbling
-    speed 0.65 against 0.88 for the nearest player). Each team keeps its best time, which makes
-    duplicated slots harmless and slot order irrelevant, and the difference between the two
-    teams' best times goes through a logistic: e = 2 * p_home - 1.
+For mtah/fusion.py, through mtah/r2_features.py:
 
-evidence_shape: the complement, for the frames evidence() has to leave at 0. Non-zero only where
-    lost_mask is True, exactly 0 elsewhere. Per half, a logistic model on ball-free team-shape
-    features (each a home-minus-away difference in each team's own attacking direction), trained
-    on that half's own clear contacts: trusted frames where one team's nearest player is within
-    SHAPE_NEAR_M of the ball and the other's beyond SHAPE_FAR_M. Those pseudo-labels are made by
-    an algorithm from the tracking; no hand labels. R4 may add it to evidence() on lost frames.
+time_lead (with scan_teams): seconds by which home's best player beats away's to the ball. Each
+    player's time to reach it is a reaction time plus a straight run at MAX_RUN_MS from where their
+    current velocity carries them during the reaction, to where the ball's own velocity carries it
+    in the same time (a simple pitch-control model, after Spearman 2018). Each team keeps its best
+    time, which makes duplicated slots harmless and slot order irrelevant.
 
-evidence_calibrated, evidence_shape_calibrated: the two above with the calibration fitted on
-    Metrica's open games (REACH_CALIBRATION, SHAPE_TEMPERATURE; mtah/evidence_fit.py).
-
-evidence: the nearest player's team, weighted by exp(-distance / SIGMA_M). Chosen by
-    leave-one-game-out spellF1 on Metrica's open games, ball masked and displaced like ours
-    (python -m mtah.evidence_fit), two sets of masks: nearest 0.40-0.42, best reach variant 0.39
-    (a tie, so the simpler one stays), calibrating either a tie. R4 should add
-    evidence_shape_calibrated on lost frames, where evidence() is 0: nearest plus shape scores
-    0.49-0.51, +0.07 to +0.11, better on every game with both masks. For mtah/fusion.py the same
-    pieces come as per-frame features from mtah/r2_features.py.
+shape_logits: per half, a logistic model on ball-free team-shape features (each a home-minus-away
+    difference in each team's own attacking direction), trained on that half's own clear contacts:
+    trusted frames where one team's nearest player is within SHAPE_NEAR_M of the ball and the
+    other's beyond SHAPE_FAR_M. Those pseudo-labels are made by an algorithm from the tracking; no
+    hand labels.
 """
-import math
 from typing import NamedTuple, Sequence
 
 import numpy as np
 from scipy.special import expit
 
 from mtah.ball import ball_clean
-from mtah.config import FPS, GRADED_HALVES, N_FRAMES, PITCH_M
+from mtah.config import FPS, PITCH_M
 from mtah.interfaces import AWAY, HOME, BoolArray, FloatArray, Interval, Tracking
 
-SIGMA_M = 2.0  # placeholder: evidence decays as exp(-distance / SIGMA_M)
+SIGMA_M = 2.0  # evidence decays as exp(-distance / SIGMA_M)
 
-# Time to reach the ball. Reaction time and running speed are Spearman's (2018) pitch-control
-# values; the control uncertainty sets how fast a time advantage becomes certainty.
+# Time to reach the ball: Spearman's (2018) pitch-control reaction time and running speed.
 REACTION_S = 0.7
 MAX_RUN_MS = 5.0
-CONTROL_SIGMA_S = 0.45
-CONTROL_SCALE_S = CONTROL_SIGMA_S * math.sqrt(3) / math.pi  # logistic scale with that std
 TIME_CAP_S = 10.0  # beyond this a team is simply far away; caps keep the difference finite
 
 # Velocity from positions over about 0.5 s: a central difference of +-VEL_HALF_FRAMES, one-sided
@@ -69,17 +55,6 @@ SHAPE_LINE = (1, 5)  # sorted from the own goal: skip the deepest (the keeper), 
 SHAPE_COLUMNS = ("block", "width", "length", "line", "forward", "speed")  # every feature shape_features knows
 SHAPE_FEATURES = SHAPE_COLUMNS  # the ones the shipped model uses
 FIT_DECIMALS = 6  # fitted weights are rounded, so last-bit BLAS differences cannot reach labels
-
-# Calibration, fitted on Metrica's open games only (python -m mtah.evidence_fit prints these).
-# Reach: logit p_home = lead * max(a + b * best_t + c * ball_speed, 0), so the faster team is
-# always favoured, more when someone is near the ball and the ball is slow. (a, 0, 0) is plain
-# Platt scaling. Shape: logit p_home = k * the half's own model logit.
-# Fitted on games 1-3 (sample-data commit e706dd5), ball masked and displaced like ours, mask seed
-# offset 0; rerun the command above to regenerate them. The nearest-player evidence is left as it
-# is: its fitted Platt slope is 0.97 on Metrica's own ball and 1.24 on the displaced one, and
-# calibrating it ties on spellF1 either way.
-REACH_CALIBRATION = (1.649462, 0.0, 0.0)
-SHAPE_TEMPERATURE = 0.645468
 BALL_VEL_HALF_FRAMES = 3  # ball velocity from a central difference over 6 frames (0.24 s)
 
 
@@ -135,50 +110,6 @@ def nearest_evidence(ball: FloatArray, lost: BoolArray, players: FloatArray, tea
     return e
 
 
-def evidence_reach(tracking: Tracking) -> FloatArray:
-    _check_fps(tracking)
-    filled, lost = ball_clean(tracking.ball)
-    scan = scan_teams(filled, tracking.players, tracking.team)
-    return reach_from_times(scan.t_best[:, HOME], scan.t_best[:, AWAY], lost)
-
-
-def evidence_shape(tracking: Tracking) -> FloatArray:
-    _check_fps(tracking)
-    filled, lost = ball_clean(tracking.ball)
-    scan = scan_teams(filled, tracking.players, tracking.team)
-    return logit_to_evidence(shape_logits(scan, lost, halves_for(tracking.n_frames))[0])
-
-
-def evidence_calibrated(tracking: Tracking) -> FloatArray:
-    """evidence_reach with the time lead mapped to p_home by REACH_CALIBRATION."""
-    _check_fps(tracking)
-    filled, lost = ball_clean(tracking.ball)
-    scan = scan_teams(filled, tracking.players, tracking.team)
-    return logit_to_evidence(calibrated_logit(*reach_inputs(scan, lost), REACH_CALIBRATION))
-
-
-def evidence_shape_calibrated(tracking: Tracking) -> FloatArray:
-    """evidence_shape with the logit scaled by SHAPE_TEMPERATURE."""
-    _check_fps(tracking)
-    filled, lost = ball_clean(tracking.ball)
-    scan = scan_teams(filled, tracking.players, tracking.team)
-    return logit_to_evidence(SHAPE_TEMPERATURE * shape_logits(scan, lost, halves_for(tracking.n_frames))[0])
-
-
-def reach_inputs(scan: Scan, lost: BoolArray) -> tuple[FloatArray, FloatArray, FloatArray]:
-    """(lead, best_t, ball_speed), [T] each: home's time lead (0 where lost or a team is not
-    tracked), the faster team's time (capped) and the ball's speed in m/s."""
-    lead = time_lead(scan.t_best[:, HOME], scan.t_best[:, AWAY], lost)
-    best = np.minimum(np.minimum(scan.t_best[:, HOME], scan.t_best[:, AWAY]), TIME_CAP_S)
-    return lead, best, scan.ball_speed
-
-
-def calibrated_logit(lead: FloatArray, best_t: FloatArray, speed: FloatArray, params: Sequence[float]) -> FloatArray:
-    """lead * max(a + b * best_t + c * speed, 0). Odd in lead, so swapping teams negates it."""
-    a, b, c = params
-    return lead * np.maximum(a + b * best_t + c * speed, 0.0)
-
-
 def ball_velocity(filled: FloatArray) -> FloatArray:
     """[T, 2] m/s from a NaN-free ball track: central difference over 2 * BALL_VEL_HALF_FRAMES,
     the end frames copying their neighbour; 0 for a track too short to difference."""
@@ -190,17 +121,7 @@ def ball_velocity(filled: FloatArray) -> FloatArray:
     return vel
 
 
-def ball_speed(filled: FloatArray) -> FloatArray:
-    """[T] m/s, the length of ball_velocity."""
-    return np.linalg.norm(ball_velocity(filled), axis=1)
-
-
 # -- time to the ball ---------------------------------------------------------------------------
-
-def reach_from_times(t_home: FloatArray, t_away: FloatArray, lost: BoolArray) -> FloatArray:
-    """e = 2 * p_home - 1 from each team's best time; 0 where lost or a team is not tracked."""
-    return logit_to_evidence(time_lead(t_home, t_away, lost) / CONTROL_SCALE_S)
-
 
 def time_lead(t_home: FloatArray, t_away: FloatArray, lost: BoolArray) -> FloatArray:
     """[T] seconds by which home's best player beats away's to the ball (capped at TIME_CAP_S);
@@ -209,12 +130,6 @@ def time_lead(t_home: FloatArray, t_away: FloatArray, lost: BoolArray) -> FloatA
     lead = np.zeros(t_home.shape[0])
     lead[ok] = np.minimum(t_away[ok], TIME_CAP_S) - np.minimum(t_home[ok], TIME_CAP_S)
     return lead
-
-
-def team_times(ball: FloatArray, players: FloatArray, team: np.ndarray) -> tuple[FloatArray, FloatArray]:
-    """Each team's best time to reach the ball, in seconds, [T] each (see scan_teams)."""
-    scan = scan_teams(ball, players, team)
-    return scan.t_best[:, HOME], scan.t_best[:, AWAY]
 
 
 def scan_teams(ball: FloatArray, players: FloatArray, team: np.ndarray) -> Scan:
@@ -289,13 +204,6 @@ def _nanmean_rows(values: FloatArray) -> FloatArray:
 
 # -- team shape ---------------------------------------------------------------------------------
 
-def halves_for(n_frames: int) -> tuple[Interval, ...]:
-    """The published graded halves for our match; one half spanning everything otherwise."""
-    if n_frames == N_FRAMES:
-        return GRADED_HALVES
-    return ((0, n_frames - 1),)
-
-
 def shape_features(scan: Scan, first: int, last: int, direction: int, length: float = PITCH_M[0],
                    features: Sequence[str] = SHAPE_FEATURES) -> FloatArray:
     """[n, F] smoothed home-minus-away shape features for frames first..last (inclusive), the
@@ -368,16 +276,6 @@ def shape_logits(scan: Scan, lost: BoolArray, halves: Sequence[Interval], everyw
             logit[first : last + 1][on] = (x[on] / scale) @ weights
         models.append(ShapeModel(first, last, direction, n_home, n_away, scale, weights, features))
     return logit, models
-
-
-def logit_to_evidence(logit: FloatArray) -> FloatArray:
-    """2 * sigmoid(logit) - 1, written so that negating the logit negates e bit for bit."""
-    return np.sign(logit) * np.tanh(np.abs(logit) / 2.0)
-
-
-def evidence_to_logit(e: FloatArray) -> FloatArray:
-    """The inverse of logit_to_evidence, with |e| kept below 1 so the logit stays finite."""
-    return np.sign(e) * 2.0 * np.arctanh(np.minimum(np.abs(e), 1.0 - 1e-12))
 
 
 def fit_logistic(z: FloatArray, ridge: float, max_iter: int = 100, tol: float = 1e-10) -> FloatArray:
