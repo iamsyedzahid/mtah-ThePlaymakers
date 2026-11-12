@@ -171,8 +171,8 @@ rule-only pipeline and on the earlier submitted version (spellF1 0.553 there, 17
   nearest player is a median 0.04-0.09 m away, against 1.21 m on our match (moving it 0.3-2.5 m off
   brings Metrica's to 1.09-1.27 m). A model trained on balls at the players' feet may read our match's
   proximity as weaker than it is.
-- **Dead ball.** On our match the pipeline marks 35.5% of graded frames D: 30.0% in the first half and
-  41.0% in the second, of which 3.7 points are the published block. The earlier rule-only pipeline,
+- **Dead ball.** On our match the pipeline marks 37.5% of graded frames D: 34.4% in the first half and
+  40.5% in the second, of which 3.7 points are the published block. The earlier rule-only pipeline,
   built on different cues (set-piece tags, a still camera, slow players), also finds more D after the
   break (24.4% and 31.6%), so the second half of this match likely has more stoppages. On the DFL
   matches, whose labels are built like ours, D is 41-52% of frames.
@@ -219,9 +219,9 @@ Metrica), and merging possessions under 2 s (see above).
 | | Value |
 |---|---|
 | Benchmark, ten matches held out in turn, spellF1 | 0.580 (0.507 with the ball displaced) |
-| Graded frames, H / A / D | (to fill from the final run) |
-| Possessions in the graded halves | (to fill from the final run) |
-| SHA-256 of the submission file | (to fill from the final run) |
+| Graded frames, H / A / D | 36.0% / 26.5% / 37.5% |
+| Possessions in the graded halves | 387 (193 and 194), 3.65 a minute, median 6.2 s |
+| SHA-256 of the submission file | `002c07e3329aab1474ae255deab9040ba254d9d3e4bb5df4c9c23b07c02e6b9c` |
 
 ## Rules and use of AI
 
