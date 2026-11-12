@@ -8,12 +8,12 @@ Columns (FEATURE_NAMES), every one home-positive:
                     mtah/evidence.py on the ball given. [-1, 1]; 0 where ball_clean calls the ball
                     lost or nobody is tracked.
     r2_reach_lead   seconds by which home's best player beats away's to the ball, both moving
-                    (evidence_reach's time lead). [-10, 10]; 0 where lost or a team is untracked.
+                    (evidence.time_lead). [-10, 10]; 0 where lost or a team is untracked.
     r2_shape        the half's own shape model: logit of p_home from team shape alone, fitted on
                     that half's clear contacts (pseudo-labels, no labels). On every frame of the
                     half with both teams tracked; 0 outside the halves, and in a half with fewer
                     than 100 clear contacts per team. Capped at +-SHAPE_LOGIT_CAP.
-    r2_shape_lost   r2_shape on lost frames only, 0 elsewhere: what evidence_shape adds.
+    r2_shape_lost   r2_shape on lost frames only, 0 elsewhere: what fusion adds to its rules there.
 
 Calling again with 1 - team gives exactly -X, bit for bit, so the swapped orientation is free.
 There is no NaN and no infinity: 0 means no information, as for evidence. (NaN would become -1 in
@@ -40,11 +40,13 @@ OFF_PITCH_SHARE = 0.2  # ...and centre-origin data puts about half of all positi
 
 
 def fusion_features(ball: np.ndarray, players: np.ndarray, team: np.ndarray, pitch: Sequence[float],
-                    halves: Sequence[Sequence[int]]) -> tuple[np.ndarray, list[str]]:
+                    halves: Sequence[Sequence[int]], shape_fit: ev.ShapeFit | None = None
+                    ) -> tuple[np.ndarray, list[str]]:
     """[T, k] float features plus k names, for the learned layer in mtah/fusion.py.
 
     ball [T, 2] and players [T, S, 2] in corner-origin metres, NaN where missing; team [S], 0 for
-    home; pitch (length, width) in metres; halves [start, end) frame pairs. Per-half models are
+    home; pitch (length, width) in metres; halves [start, end) frame pairs. shape_fit: a shape model
+    fitted on other matches (evidence.fit_shape), used in every half; without it, per-half models are
     fitted inside each half only. See the module docstring for the columns.
     """
     ball, players = (_inf_as_missing(np.asarray(a, dtype=float)) for a in (ball, players))
@@ -57,7 +59,7 @@ def fusion_features(ball: np.ndarray, players: np.ndarray, team: np.ndarray, pit
     scan = ev.scan_teams(filled, tracking.players, tracking.team)
     nearest = ev.nearest_evidence(tracking.ball, lost, tracking.players, tracking.team)
     lead = ev.time_lead(scan.t_best[:, HOME], scan.t_best[:, AWAY], lost)
-    shape, _ = ev.shape_logits(scan, lost, inclusive, everywhere=True, length=length)
+    shape, _ = ev.shape_logits(scan, lost, inclusive, everywhere=True, length=length, fitted=shape_fit)
     shape = np.clip(shape, -SHAPE_LOGIT_CAP, SHAPE_LOGIT_CAP)
     shape_lost = np.where(lost, shape, 0.0)
     return np.column_stack([nearest, lead, shape, shape_lost]), list(FEATURE_NAMES)

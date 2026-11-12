@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 import run
-from mtah import ball, config, deadball, evidence, interfaces, segment, touches, xpolicy
+from mtah import ball, config, deadball, evidence, interfaces, segment, touches
 from mtah.interfaces import A, D, H, X, Touch, Tracking
 from mtah.synthetic import make_synthetic
 
@@ -23,8 +23,13 @@ T = 3_000
         (evidence, "evidence"),
         (touches, "touches"),
         (deadball, "dead_mask"),
+        (deadball, "dead_intervals"),
+        (deadball, "untagged_intervals"),
+        (deadball, "slow_lost_intervals"),
+        (deadball, "camera_still_intervals"),
+        (deadball, "join_close"),
+        (deadball, "restart_touches"),
         (segment, "segment"),
-        (xpolicy, "to_x_policy"),
     ],
 )
 def test_signature_matches_interface(module, name):
@@ -120,13 +125,7 @@ def test_synthetic_corner_origin(syn):
 # Ball cleaning and gap statistics (R1) are in tests/test_r1_ball.py.
 
 
-# -- evidence (R2) ----------------------------------------------------------------------------
-
-def test_evidence_shape_and_nan(syn):
-    e = evidence.evidence(syn.tracking)
-    assert e.shape == (T,) and e.dtype == np.float64
-    assert np.isfinite(e).all()
-    assert (e[np.isnan(syn.tracking.ball).any(axis=1)] == 0).all()
+# Control evidence (R2) is tested in tests/test_r2_evidence.py.
 
 
 def test_evidence_sign():
@@ -200,10 +199,34 @@ def test_segment_on_synthetic(syn):
 
 def test_segment_only_receptions_flip():
     n = 200
-    e = np.r_[np.ones(50), -np.ones(150)]  # evidence turns to away, but nobody receives
-    events = [Touch(0, 0, "reception"), Touch(60, 1, "deflection")]
+    e = np.r_[np.ones(120), -np.ones(80)]  # evidence turns to away, but nobody away receives
+    events = [Touch(0, 0, "reception"), Touch(130, 1, "deflection")]
     labels = segment.segment(e, np.zeros(n, bool), np.zeros(n, bool), events)
     assert (labels == H).all()
+
+
+def test_segment_ignores_a_reception_the_evidence_contradicts():
+    # A presser's reception at 100, but home stays in control afterwards: no flip.
+    n = 300
+    e = np.ones(n)
+    events = [Touch(0, 0, "reception"), Touch(100, 1, "reception")]
+    labels = segment.segment(e, np.zeros(n, bool), np.zeros(n, bool), events)
+    assert (labels == H).all()
+    # The same reception followed by away control is a turnover.
+    e[100:] = -1.0
+    labels = segment.segment(e, np.zeros(n, bool), np.zeros(n, bool), events)
+    assert (labels[:100] == H).all() and (labels[100:] == A).all()
+
+
+def test_segment_change_after_a_lost_ball_moves_into_the_gap():
+    n = 300
+    lost = np.zeros(n, bool)
+    lost[100:200] = True
+    e = np.r_[np.ones(100), np.zeros(100), -np.ones(100)]
+    events = [Touch(0, 0, "reception"), Touch(205, 1, "reception")]
+    labels = segment.segment(e, lost, np.zeros(n, bool), events)
+    first_away = int(np.flatnonzero(labels == A)[0])
+    assert 100 < first_away < 200 and (labels[first_away:] == A).all()
 
 
 def test_segment_d_only_from_dead_mask():
@@ -221,19 +244,6 @@ def test_segment_no_information_still_has_a_team():
     n = 50
     labels = segment.segment(np.zeros(n), np.ones(n, bool), np.zeros(n, bool), [])
     assert set(np.unique(labels)) <= {H, A}
-
-
-def test_x_policy_only_mid_possession():
-    labels = np.array([H] * 100 + [A] * 100 + [D] * 20 + [H] * 30, dtype="<U1")
-    assert (xpolicy.to_x_policy(labels) == labels).all()
-
-    out = xpolicy.to_x_policy(labels, confidence=np.zeros(labels.size), threshold=0.5, margin=10)
-    assert (out[:10] == H).all() and (out[90:110] != X).all()  # run edges untouched
-    assert (out[10:90] == X).all()
-    assert (out[200:220] == D).all()  # D never becomes X
-    assert (out[220:230] == H).all() and (out[240:] == H).all()
-    changed = out != labels
-    assert set(np.unique(labels[changed])) <= {H, A}
 
 
 # -- end to end -------------------------------------------------------------------------------
