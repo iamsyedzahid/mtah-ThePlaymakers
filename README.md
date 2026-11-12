@@ -8,6 +8,25 @@ engineers. You are given one complete LaLiga match — two camera feeds, automat
 player and the ball, automatic tactical tagging, and the camera-to-pitch geometry — and one
 question to answer with it.
 
+> ### The Playmakers' submission
+>
+> Our approach, data and rules are in **[docs/TECHNICAL.md](docs/TECHNICAL.md)**. To regenerate
+> our file (Python 3.10 or newer; tested on 3.14.6):
+>
+> ```
+> python -m venv .venv
+> .venv\Scripts\activate                              # macOS/Linux: source .venv/bin/activate
+> pip install -r requirements.txt
+> python -m pytest -q                                   # synthetic data only
+> $env:MTAH_DATA_DIR = "<folder holding tactical/>"     # macOS/Linux: export MTAH_DATA_DIR=...
+> python run.py --real                                  # writes outputs/The Playmakers.csv, prints its SHA-256
+> python evaluation/validate_submission.py "outputs/The Playmakers.csv"
+> ```
+>
+> `bash scripts/fresh_clone_check.sh` checks a clean clone installs, passes the tests and runs
+> byte-identically. `python scripts/benchmark_open_games.py` compares versions on open matches.
+> The rest of this README is the organisers' original.
+
 ---
 
 ## The task
