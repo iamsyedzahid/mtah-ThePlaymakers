@@ -3,7 +3,7 @@
 Chosen on two labelled benchmarks of other matches, which the rules allow: Metrica's three open games
 (mtah/opengames.py, labels from their events) and seven DFL Bundesliga matches (mtah/dfl.py, labels
 from tracking ownership like our ground truth). Trained on both, with each match held out in turn, it
-scores a mean spellF1 of 0.573 over the ten (0.505 with the ball displaced like ours). Built from ideas pooled across
+scores a mean spellF1 of 0.580 over the ten (0.507 with the ball displaced like ours). Built from ideas pooled across
 team forks and from the team's own modules (R2's evidence, R3's receptions); see docs/TECHNICAL.md.
 
 Inputs are plain arrays in metres, x in [0, L], y in [0, W]: ball [T, 2] and players [T, S, 2] with NaN
@@ -14,10 +14,11 @@ where unseen, team [S] with 0 = home. Output codes [T]: 0 = H, 1 = A, 2 = D, 3 =
    ball is outside the pitch; each team's mean x.
 2. Team evidence (`team_logodds`): the nearest-distance difference, weighted down when nobody is near
    and when the ball flies. With the ball missing, R2's shape model takes over (`team_columns`): a
-   logistic model on team shape, fitted per half on that half's own clear contacts (pseudo-labels).
+   logistic model on team shape, fitted once on the open matches' clear contacts (`fit_context`).
 3. Dead-ball evidence (`dead_llr`): ball off the pitch, a resting ball among slow players, a missing
-   ball among slow players, and a two-group fit of collective player speed per half (slow and fast,
-   with no fixed threshold). A missing ball alone is never dead.
+   ball among slow players, and how likely the collective player speed is under a slow group against
+   a fast one, both fitted on the open matches (`fit_context`). A missing ball alone is never dead.
+   Nothing is fitted on the match being labelled.
 4. Learned layer (`train`, `learned_logp`): a gradient-boosted classifier on windowed features and on
    R2's and R3's per-frame columns (`team_columns`), trained on the open games with home and away
    swapped as well, and applied both ways round and averaged, so it cannot favour either team. Missing
@@ -28,9 +29,13 @@ where unseen, team [S] with 0 = home. Output codes [T]: 0 = H, 1 = A, 2 = D, 3 =
 
 Every fitted step is deterministic: fixed seeds, and callers run it on one thread (run.py).
 """
+from typing import NamedTuple
+
 import numpy as np
 
+from mtah.ball import ball_clean
 from mtah.config import FPS
+from mtah.evidence import ShapeFit, fit_shape, scan_teams, shape_contacts
 from mtah.r2_features import FEATURE_NAMES as R2_COLUMNS
 from mtah.r2_features import fusion_features
 from mtah.touches import touches
@@ -157,8 +162,34 @@ def team_logodds(f, scale=1.8, clip=3.0, fast=10.0):
     return np.nan_to_num(lo * reach * damp, nan=0.0)
 
 
-def dead_llr(f, halves):
-    """Positive favours dead ball."""
+class Context(NamedTuple):
+    """What the submission fits on the open matches besides the learned layer (fit_context), so that
+    nothing is fitted on the match it labels."""
+
+    shape: ShapeFit  # R2's team-shape model, from the open matches' clear contacts
+    speed_groups: tuple  # (means, spreads, weights) of the slow and fast groups of log player speed
+
+
+def context_parts(gm):
+    """One open match's share of fit_context: its clear contacts and its log player speeds."""
+    ball, players, team = np.asarray(gm["ball"], float), np.asarray(gm["players"], float), np.asarray(gm["team"])
+    filled, lost = ball_clean(ball)
+    scan = scan_teams(filled, players, team)
+    contacts = shape_contacts(scan, lost, [(a, b - 1) for a, b in gm["halves"]], length=gm["pitch"][0])
+    ps = frame_features(ball, players, team, gm["pitch"])["pspeed"]
+    speeds = np.concatenate([np.log(np.maximum(ps[a:b], 0.05)) for a, b in gm["halves"]])
+    return contacts, speeds[np.isfinite(speeds)]
+
+
+def fit_context(games=None, parts=None):
+    """Fit the shape model and the speed groups on open matches (or on their context_parts)."""
+    parts = parts if parts is not None else [context_parts(gm) for gm in games]
+    return Context(fit_shape([c for c, _ in parts]), _two_groups(np.concatenate([s for _, s in parts])))
+
+
+def dead_llr(f, halves, speed_groups=None):
+    """Positive favours dead ball. speed_groups: fitted on the open matches (Context); without them,
+    each half's own player speeds are split into a slow and a fast group."""
     T = len(f["vis"])
     llr = np.where(np.nan_to_num(f["out_m"], nan=-9) > 0.5, 3.0, 0.0)
     llr += np.where(np.nan_to_num(f["bspeed"], nan=0) > 6.0, -1.5, 0.0)  # a fast ball on the pitch is live
@@ -167,7 +198,7 @@ def dead_llr(f, halves):
         x = np.log(np.maximum(ps[lo:hi], 0.05))
         if np.isfinite(x).sum() < 1000:
             continue
-        m, s, w = _two_groups(x)
+        m, s, w = speed_groups if speed_groups is not None else _two_groups(x)
         slow = int(np.argmin(m))
         p_slow = w[slow] * np.exp(-0.5 * ((x - m[slow]) / s[slow]) ** 2) / s[slow]
         p_fast = w[1 - slow] * np.exp(-0.5 * ((x - m[1 - slow]) / s[1 - slow]) ** 2) / s[1 - slow]
@@ -180,15 +211,15 @@ def dead_llr(f, halves):
     return llr
 
 
-def team_columns(ball, players, team, pitch, halves):
+def team_columns(ball, players, team, pitch, halves, shape_fit=None):
     """[T, 7] per-frame columns from the teammates' modules, named in TEAM_COLUMNS.
 
-    R2's four (mtah/r2_features.py): nearest-player evidence, time-to-ball lead, and the half's own
-    shape-model logit on every frame and on lost frames. R3's three (mtah/touches.py), see r3_columns.
-    Every column is home-positive except R3's "seconds since", so swapping the teams negates all but
-    that one (TEAM_COLUMN_SIGNS).
+    R2's four (mtah/r2_features.py): nearest-player evidence, time-to-ball lead, and the shape-model
+    logit on every frame and on lost frames (shape_fit from the open matches; without it, each half's
+    own). R3's three (mtah/touches.py), see r3_columns. Every column is home-positive except R3's
+    "seconds since", so swapping the teams negates all but that one (TEAM_COLUMN_SIGNS).
     """
-    r2 = np.asarray(fusion_features(ball, players, team, pitch, halves)[0], dtype=float)
+    r2 = np.asarray(fusion_features(ball, players, team, pitch, halves, shape_fit)[0], dtype=float)
     return np.column_stack([r2, r3_columns(ball, players, team, halves)])
 
 
@@ -252,10 +283,12 @@ def swap_codes(codes):
     return out
 
 
-def training_rows(gm):
-    """One game's (features, codes) pairs, as it is and with home and away swapped. Graded frames only."""
+def training_rows(gm, context=None):
+    """One game's (features, codes) pairs, as it is and with home and away swapped. Graded frames only.
+    context: from fit_context on the training games, as the submission uses it."""
     f = frame_features(gm["ball"], gm["players"], gm["team"], gm["pitch"])
-    team_cols = team_columns(gm["ball"], gm["players"], gm["team"], gm["pitch"], gm["halves"])
+    shape_fit = context.shape if context is not None else None
+    team_cols = team_columns(gm["ball"], gm["players"], gm["team"], gm["pitch"], gm["halves"], shape_fit)
     rows = []
     for swap in (False, True):
         feats, _ = learned_features(f, gm["players"], gm["team"], gm["pitch"], gm["halves"], team_cols, swap=swap)
@@ -275,8 +308,10 @@ def fit(rows):
 
 
 def train(games):
-    """Fit the learned layer. games: dicts with ball, players, team, pitch, halves and codes (0-3)."""
-    return fit([r for gm in games for r in training_rows(gm)])
+    """(context, learned layer), both fitted on games: dicts with ball, players, team, pitch, halves
+    and codes (0-3)."""
+    context = fit_context(games)
+    return context, fit([r for gm in games for r in training_rows(gm, context)])
 
 
 def learned_logp(model, f, players, team, pitch, halves, team_cols):
@@ -306,20 +341,24 @@ def viterbi(score, switch_team=SWITCH_TEAM, switch_dead=SWITCH_DEAD):
     return path
 
 
-def label(ball, players, team, pitch, halves, model=None, known_dead=None):
+def label(ball, players, team, pitch, halves, model=None, known_dead=None, context=None):
     """Codes [T]: 0 H, 1 A, 2 D inside halves ([start, end) pairs), 3 X outside them.
 
+    model and context: from train (or fit and fit_context) on other matches. The submission passes
+    both, so nothing is fitted on the match being labelled; without a context, the shape model and the
+    speed groups are fitted on each half of this match (kept for tests and comparison only).
     known_dead: optional bool [T], frames that are D by a published fact (the second-half block).
     """
     ball, players, team = np.asarray(ball, float), np.asarray(players, float), np.asarray(team)
     T = len(ball)
     f = frame_features(ball, players, team, pitch)
-    team_cols = team_columns(ball, players, team, pitch, halves)
+    shape_fit, speed_groups = (context.shape, context.speed_groups) if context is not None else (None, None)
+    team_cols = team_columns(ball, players, team, pitch, halves, shape_fit)
     shape = np.clip(team_cols[:, R2_SHAPE_COLUMN], -2, 2) * SHAPE_WEIGHT
     lo = team_logodds(f) + shape * np.logical_not(f["vis"])
     score = np.zeros((T, 3))
     score[:, H], score[:, A] = W_RULE * lo / 2, -W_RULE * lo / 2
-    score[:, D] = W_RULE * dead_llr(f, halves)
+    score[:, D] = W_RULE * dead_llr(f, halves, speed_groups)
     if model is not None:
         score += W_LEARNED * learned_logp(model, f, players, team, pitch, halves, team_cols)
     if known_dead is not None:

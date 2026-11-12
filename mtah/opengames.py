@@ -27,16 +27,18 @@ from mtah.interfaces import A, D, H, LABEL_DTYPE, X, Tracking
 PITCH = (105.0, 68.0)  # both games, from the sample-data README
 ENV = "MTAH_OPEN_GAMES"
 DEFAULT_FOLDERS = ("outputs/metrica/sample-data/data", "outputs/metrica/sample/games")
+# Of each file with Windows line endings turned into Unix ones (digest), so a checkout on any system,
+# with or without git's line-ending conversion, gives the same hashes.
 SHA256 = {
-    "Sample_Game_1/Sample_Game_1_RawEventsData.csv": "803f312a07572912b9ca2dc9482d31a75e573eae825773253b4ca9472e7760c0",
-    "Sample_Game_1/Sample_Game_1_RawTrackingData_Away_Team.csv": "380e1b23affe778a7e1e8480983291798f118f71b1dbcf8f9729c06977669101",
-    "Sample_Game_1/Sample_Game_1_RawTrackingData_Home_Team.csv": "ed7289a72d41f280b5316647655b1934575d3506c34e181c343294ceafdcb280",
-    "Sample_Game_2/Sample_Game_2_RawEventsData.csv": "c2296e8e0caf6f5bb832d5ecf9ebb52c13b18815b1fdbbf79a886238a01d6472",
-    "Sample_Game_2/Sample_Game_2_RawTrackingData_Away_Team.csv": "f887c6c9227e56c01d1bf62d8d5bc66cdbc1da0c3e9b397c0e9499a0bc6dcb20",
-    "Sample_Game_2/Sample_Game_2_RawTrackingData_Home_Team.csv": "92cc3ae1b5ac74530e21a899ab71cf12ee3a58c16592e87add6197f88a042b31",
-    "Sample_Game_3/Sample_Game_3_events.json": "ce12d8bf2b8242825e343fe12a06a0731f2d35e0ffb130603ef746f79fbf0b09",
-    "Sample_Game_3/Sample_Game_3_metadata.xml": "0011881426043ff4d404b3445381eafb69086a02d95ac3bcf213a062fae74502",
-    "Sample_Game_3/Sample_Game_3_tracking.txt": "bd33b0a6f89d5617275eac373b3fd043247c581759484e8f566f7701d09975c9",
+    "Sample_Game_1/Sample_Game_1_RawEventsData.csv": "097dda6345e17390dca095331458fd00e47960c480c76f4356fd4edf2575ef05",
+    "Sample_Game_1/Sample_Game_1_RawTrackingData_Away_Team.csv": "0a3df68a92af0290ede472e62de3b6489ddee29223da09bdf0cf76c8e0ab0618",
+    "Sample_Game_1/Sample_Game_1_RawTrackingData_Home_Team.csv": "0a3d0eff7785950379c587d3597b86a2d91c2492281b4652e1abb97c99b6b364",
+    "Sample_Game_2/Sample_Game_2_RawEventsData.csv": "edf31a18599265b77a8baf150f2ce6d89456fb0324b62ea7a391229657a619ba",
+    "Sample_Game_2/Sample_Game_2_RawTrackingData_Away_Team.csv": "aa639f40762eade46c389020fe4458266b5ba14027b1e96e22e75db62803718b",
+    "Sample_Game_2/Sample_Game_2_RawTrackingData_Home_Team.csv": "3f9990ac204b07133e4202441d6fcbb386897c7c7f81e1bc3ce4d35bc8644694",
+    "Sample_Game_3/Sample_Game_3_events.json": "28a53bfe9eaf32535362335553d517cdce0eabb588af6166009081753751f4e0",
+    "Sample_Game_3/Sample_Game_3_metadata.xml": "009c7dcfcb66192014917ca1559c158f612353e390eafb85f8214b06a1c7dec1",
+    "Sample_Game_3/Sample_Game_3_tracking.txt": "570e6ce82c2d93bc92723af331d93c31110bec1d6dc0be07c6d44ca3f981d658",
 }
 ON_BALL = {"PASS", "CARRY", "RECOVERY", "SHOT", "SET PIECE"}
 
@@ -55,11 +57,15 @@ def folder(path: str | os.PathLike | None = None) -> Path:
     raise FileNotFoundError(f"no Sample_Game_1 under {', '.join(map(str, candidates))}; see mtah/opengames.py")
 
 
+def digest(path: Path) -> str:
+    """SHA-256 of a file with its line endings made Unix ones."""
+    return hashlib.sha256(Path(path).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
 def verify(games_folder: Path) -> None:
     """Raise unless every file matches the pinned SHA-256."""
     for name, expected in SHA256.items():
-        digest = hashlib.sha256((games_folder / name).read_bytes()).hexdigest()
-        if digest != expected:
+        if digest(games_folder / name) != expected:
             raise ValueError(f"{name} differs from the pinned open games (commit e706dd5)")
 
 

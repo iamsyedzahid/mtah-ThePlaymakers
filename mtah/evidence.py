@@ -249,10 +249,43 @@ def clear_contacts(scan: Scan, lost: BoolArray) -> FloatArray:
     return home.astype(float) - away.astype(float)
 
 
+class ShapeFit(NamedTuple):
+    """A shape model fitted once on other matches' clear contacts (fit_shape), for shape_logits."""
+
+    scale: FloatArray  # [F] RMS of each feature over the clear contacts
+    weights: FloatArray  # [F] on the standardised features
+
+
+def _fit(x: FloatArray, y: FloatArray) -> ShapeFit:
+    scale = np.sqrt(np.mean(x ** 2, axis=0))
+    scale = np.array([float(f"{s:.6g}") if s > 0 else 1.0 for s in scale])
+    return ShapeFit(scale, np.round(fit_logistic(y[:, None] * x / scale, SHAPE_RIDGE), FIT_DECIMALS))
+
+
+def shape_contacts(scan: Scan, lost: BoolArray, halves: Sequence[Interval], length: float = PITCH_M[0],
+                   features: Sequence[str] = SHAPE_FEATURES) -> tuple[FloatArray, FloatArray]:
+    """(x [n, F], y [n] of +-1): every half's clear contacts as shape features, for fit_shape."""
+    labels = clear_contacts(scan, lost)
+    xs, ys = [np.zeros((0, len(tuple(features))))], [np.zeros(0)]
+    for first, last in halves:
+        x = shape_features(scan, first, last, attack_direction(scan, first, last), length, features)
+        y = labels[first : last + 1]
+        use = (y != 0) & np.isfinite(x).all(axis=1)
+        xs.append(x[use])
+        ys.append(y[use])
+    return np.vstack(xs), np.concatenate(ys)
+
+
+def fit_shape(contacts: Sequence[tuple[FloatArray, FloatArray]]) -> ShapeFit:
+    """One shape model from the clear contacts of other matches (shape_contacts of each), pooled."""
+    return _fit(np.vstack([x for x, _ in contacts]), np.concatenate([y for _, y in contacts]))
+
+
 def shape_logits(scan: Scan, lost: BoolArray, halves: Sequence[Interval], everywhere: bool = False,
-                 length: float = PITCH_M[0], features: Sequence[str] = SHAPE_FEATURES
-                 ) -> tuple[FloatArray, list[ShapeModel]]:
-    """([T] logit of p_home, one model per half). Each half's model is trained on that half's own
+                 length: float = PITCH_M[0], features: Sequence[str] = SHAPE_FEATURES,
+                 fitted: ShapeFit | None = None) -> tuple[FloatArray, list[ShapeModel]]:
+    """([T] logit of p_home, one model per half). With fitted (a model fitted on other matches, for
+    the submission), every half uses it; without, each half's model is trained on that half's own
     clear contacts only. The logit is set inside halves that have a model, on lost frames only
     (or on every frame with shape features, if everywhere), and is exactly 0 everywhere else.
     halves are inclusive (first, last) pairs; length and features as in shape_features."""
@@ -268,10 +301,11 @@ def shape_logits(scan: Scan, lost: BoolArray, halves: Sequence[Interval], everyw
         use = (y != 0) & finite
         n_home, n_away = int((use & (y > 0)).sum()), int((use & (y < 0)).sum())
         scale = weights = None
-        if min(n_home, n_away) >= SHAPE_MIN_LABELS:
-            scale = np.sqrt(np.mean(x[use] ** 2, axis=0))
-            scale = np.array([float(f"{s:.6g}") if s > 0 else 1.0 for s in scale])
-            weights = np.round(fit_logistic(y[use, None] * x[use] / scale, SHAPE_RIDGE), FIT_DECIMALS)
+        if fitted is not None:
+            scale, weights = fitted
+        elif min(n_home, n_away) >= SHAPE_MIN_LABELS:
+            scale, weights = _fit(x[use], y[use])
+        if weights is not None:
             on = finite if everywhere else lost[first : last + 1] & finite
             logit[first : last + 1][on] = (x[on] / scale) @ weights
         models.append(ShapeModel(first, last, direction, n_home, n_away, scale, weights, features))

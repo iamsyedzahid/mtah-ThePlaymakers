@@ -1,6 +1,6 @@
 # Who reviews what. The last matching pattern wins.
 #
-# The handles below are placeholders: replace @ThePlaymakers/rN with real GitHub users or teams.
+# The handles below are each role's GitHub account.
 #
 #   R1  Data & Ball        io_atd, teams, ball, config. Wraps or reuses games.py and
 #                          starter/load_atd.py. Metres, 0-indexed frames, home/away mapping, ball
@@ -10,7 +10,7 @@
 #   R4  Segmentation       segment, deadball, fusion
 #   R5  Tooling & docs     scripts, tests, run.py, docs
 
-*.md                    @ThePlaymakers/r5
+*.md                    @im-fama
 
 /mtah/__init__.py       @iamsyedzahid
 /mtah/io_atd.py         @iamsyedzahid
@@ -24,17 +24,17 @@
 /mtah/touches.py        @Abdullah-Sonija
 /mtah/tagging.py        @Abdullah-Sonija
 
-/mtah/segment.py        @ThePlaymakers/r4
-/mtah/deadball.py       @ThePlaymakers/r4
-/mtah/fusion.py         @ThePlaymakers/r4
+/mtah/segment.py        @alishahmeerkhan
+/mtah/deadball.py       @alishahmeerkhan
+/mtah/fusion.py         @alishahmeerkhan
 
-/mtah/opengames.py      @ThePlaymakers/r5
-/mtah/dfl.py            @ThePlaymakers/r5
+/mtah/opengames.py      @im-fama
+/mtah/dfl.py            @im-fama
 
-/mtah/synthetic.py      @ThePlaymakers/r5
-/scripts/               @ThePlaymakers/r5
-/tests/                 @ThePlaymakers/r5
-/run.py                 @ThePlaymakers/r5
+/mtah/synthetic.py      @im-fama
+/scripts/               @im-fama
+/tests/                 @im-fama
+/run.py                 @im-fama
 
 # The shared contract: every role is notified of a change to it.
-/mtah/interfaces.py     @ThePlaymakers/r1 @ThePlaymakers/r2 @ThePlaymakers/r3 @ThePlaymakers/r4 @ThePlaymakers/r5
+/mtah/interfaces.py @iamsyedzahid @SMAWAHID @Abdullah-Sonija @alishahmeerkhan @im-fama

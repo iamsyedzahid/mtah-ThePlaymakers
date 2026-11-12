@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 
-from mtah import fusion
+from mtah import evidence, fusion
 from mtah.config import PITCH_M
 from mtah.interfaces import A, D, H
 from mtah.synthetic import make_synthetic
@@ -63,15 +63,34 @@ def test_rules_follow_synthetic_possession():
 
 def test_learned_layer_is_deterministic_and_team_symmetric(model):
     g = _game(4_000, 5)
-    again = fusion.train([_game(8_000, 11), _game(8_000, 12)])
+    context, learned = model
+    again_context, again = fusion.train([_game(8_000, 11), _game(8_000, 12)])
+    np.testing.assert_array_equal(again_context.shape.weights, context.shape.weights)
+    np.testing.assert_array_equal(np.ravel(again_context.speed_groups), np.ravel(context.speed_groups))
+
     def logp(m, team):
         f = fusion.frame_features(g["ball"], g["players"], team, g["pitch"])
-        cols = fusion.team_columns(g["ball"], g["players"], team, g["pitch"], g["halves"])
+        cols = fusion.team_columns(g["ball"], g["players"], team, g["pitch"], g["halves"], context.shape)
         return fusion.learned_logp(m, f, g["players"], team, g["pitch"], g["halves"], cols)
 
-    p1 = logp(model, g["team"])
+    p1 = logp(learned, g["team"])
     np.testing.assert_array_equal(p1, logp(again, g["team"]))
-    np.testing.assert_allclose(logp(model, 1 - g["team"])[:, [1, 0, 2]], p1, atol=1e-9)
+    np.testing.assert_allclose(logp(learned, 1 - g["team"])[:, [1, 0, 2]], p1, atol=1e-9)
+
+
+def test_the_submission_fits_nothing_on_the_match_it_labels(model, monkeypatch):
+    """With a context, labelling never fits a model or a mixture: the clarified rules allow training
+    and tuning on external data only."""
+    context, learned = model
+    g = _game(6_000, 7)
+
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("fitted on the labelled match")
+
+    monkeypatch.setattr(fusion, "_two_groups", refuse)
+    monkeypatch.setattr(evidence, "fit_logistic", refuse)
+    codes = fusion.label(g["ball"], g["players"], g["team"], g["pitch"], g["halves"], model=learned, context=context)
+    assert set(np.unique(codes)) <= {0, 1, 2}
 
 
 def test_teammate_columns_change_sign_with_the_teams():

@@ -26,13 +26,18 @@ The pipeline is `mtah/fusion.py`; `run.py --real` runs it.
    speed, how far the ball is outside the pitch, and each team's centroid and spread.
 2. **Team evidence.** The difference between the two teams' nearest distances, weighted down when
    nobody is near the ball and when it flies (over 10 m/s). With the ball missing, a **shape model** takes
-   over: R2's logistic model on team shape (`mtah/evidence.py`, through `mtah/r2_features.py`), fitted
-   separately in each half on that half's own clear contacts. These are pseudo-labels made by an
-   algorithm (RULES.md), and refitting per half follows the change of ends and of tactics.
+   over: R2's logistic model on team shape (`mtah/evidence.py`, through `mtah/r2_features.py`), each
+   feature measured in each team's own attacking direction. It is fitted once on the open matches'
+   clear contacts (one team's nearest player within 1.5 m of the ball, the other's over 3 m) and
+   applied unchanged to our match.
 3. **Dead-ball evidence.** The ball more than 0.5 m outside the pitch; a ball at rest among slow
-   players; a missing ball among slow players (a weak cue: a missing ball alone is never dead); and,
-   per half, a two-group fit of collective player speed that separates slow phases from fast ones
-   without a fixed threshold.
+   players; a missing ball among slow players (a weak cue: a missing ball alone is never dead); and
+   how likely the collective player speed is under a slow group against a fast one, the two groups
+   fitted once on the open matches.
+
+Nothing is fitted on our match: the learned layer, the shape model and the speed groups are all fitted
+on the open matches (`fusion.fit_context`, `fusion.fit`), and a test checks that labelling our match
+fits nothing (`tests/test_fusion.py`).
 4. **Learned layer.** A gradient-boosted classifier (scikit-learn) on 39 features: the above, plus
    averages over windows of about 1, 3 and 8 s around each frame, the ball's position and motion
    relative to each team's attacking direction, R2's four evidence columns (nearest-player evidence,
@@ -213,10 +218,34 @@ Metrica), and merging possessions under 2 s (see above).
 
 | | Value |
 |---|---|
-| Benchmark, ten matches held out in turn, spellF1 | 0.573 (0.505 with the ball displaced) |
-| Graded frames, H / A / D | 37.0% / 27.5% / 35.5% |
-| Possessions in the graded halves | 410 (202 and 208), 3.87 a minute, median 6.0 s |
-| SHA-256 of the submission file | `31fb9a9a542782121546cdab81f7410ca678e8f26ac9fdbaec1dd8b90fde55ed` |
+| Benchmark, ten matches held out in turn, spellF1 | 0.580 (0.507 with the ball displaced) |
+| Graded frames, H / A / D | (to fill from the final run) |
+| Possessions in the graded halves | (to fill from the final run) |
+| SHA-256 of the submission file | (to fill from the final run) |
+
+## Rules and use of AI
+
+We follow the organisers' clarification of the rules.
+
+- **Training and tuning on external data only.** The learned layer, the team-shape model and the
+  player-speed groups are fitted on the ten open matches, and every setting was chosen on them, each
+  match held out in turn. Nothing is fitted on our match.
+- **The ground truth.** The public five minutes were scored only as correctness checks of the final
+  files, never to choose between versions or to tune. No other labels of our match were used.
+- **No hand labels and no video checks.** Nothing was labelled or corrected by hand, and no output was
+  checked against the video. The only frame-specific fact in the pipeline is the published
+  second-half block.
+- **Summary numbers of our match's tracking** (how often and for how long the ball is lost, how far
+  it sits from the nearest player) were measured to make the open matches look like ours: the ball
+  gaps given to the DFL matches and the displaced test view. They appear in code comments and
+  contain no labels.
+- **AI.** We used LLM coding assistants to help write and review code and documents. No competition
+  video, data file or extract was given to a hosted AI service: team members ran everything on the
+  competition data locally and shared only totals such as counts, file hashes and scores. The
+  pipeline itself uses no AI service.
+- **Licences.** The DFL/IDSSE matches are CC BY 4.0 (cited above). Metrica's sample data is published
+  by Metrica Sports, an organiser of this competition, for public use; its repository states no
+  separate licence.
 
 ## Reproduction
 
@@ -227,24 +256,16 @@ first run, most of it training on one thread.
 python -m venv .venv
 .venv\Scripts\Activate.ps1          # Linux or macOS: source .venv/bin/activate
 pip install -r requirements.txt
-
-git clone https://github.com/metrica-sports/sample-data outputs/metrica/sample-data
-git -C outputs/metrica/sample-data checkout e706dd506b360d69d9d123d5b8026e7294b13996
-
-# the 14 DFL files mtah/dfl.py needs, from the pinned mirror revision (PowerShell)
-$rev = "a715a38dfbaf5f58e431727c2b78d174101a703c"
-New-Item -ItemType Directory -Force outputs\idsse | Out-Null
-python -c "from mtah import dfl; print(*dfl.SHA256, sep='\n')" | ForEach-Object {
-    Invoke-WebRequest "https://huggingface.co/datasets/pysport/idsse-data/resolve/$rev/$_" -OutFile "outputs\idsse\$_" }
+python scripts/get_open_data.py     # the open matches, about 450 MB, each file checked against its hash
 
 $env:MTAH_DATA_DIR = "path\to\bundle"   # Linux or macOS: export MTAH_DATA_DIR=path/to/bundle; skip if in ./data
-python run.py --real --out "The Playmakers.csv"
-python evaluation/validate_submission.py "The Playmakers.csv"
+python run.py --real                # writes outputs/The Playmakers.csv and prints its SHA-256
+python evaluation/validate_submission.py "outputs/The Playmakers.csv"
 ```
 
-On Linux or macOS, fetch the same 14 files with `curl -L -o outputs/idsse/<file> <url>`. The Metrica
-games are found in `outputs/metrica/sample-data/data` and the DFL files in `outputs/idsse`; elsewhere, set
-`$MTAH_OPEN_GAMES` and `$MTAH_DFL_GAMES`, or pass `--open-games` and `--dfl-games`. The first run reads
+The Metrica games go to `outputs/metrica/sample-data/data` and the DFL files to `outputs/idsse`;
+elsewhere, set `$MTAH_OPEN_GAMES` and `$MTAH_DFL_GAMES` (or pass `--open-games` and `--dfl-games`).
+Metrica's files are checked with their line endings normalised, so a checkout on any system passes. The first run reads
 the ATD and the DFL XML and caches them in `outputs/cache/`, which takes a few minutes. Everything fitted
 uses fixed seeds and one thread, so the run writes the same file every time and prints its SHA-256 to
 compare with the one above.

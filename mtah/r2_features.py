@@ -40,11 +40,13 @@ OFF_PITCH_SHARE = 0.2  # ...and centre-origin data puts about half of all positi
 
 
 def fusion_features(ball: np.ndarray, players: np.ndarray, team: np.ndarray, pitch: Sequence[float],
-                    halves: Sequence[Sequence[int]]) -> tuple[np.ndarray, list[str]]:
+                    halves: Sequence[Sequence[int]], shape_fit: ev.ShapeFit | None = None
+                    ) -> tuple[np.ndarray, list[str]]:
     """[T, k] float features plus k names, for the learned layer in mtah/fusion.py.
 
     ball [T, 2] and players [T, S, 2] in corner-origin metres, NaN where missing; team [S], 0 for
-    home; pitch (length, width) in metres; halves [start, end) frame pairs. Per-half models are
+    home; pitch (length, width) in metres; halves [start, end) frame pairs. shape_fit: a shape model
+    fitted on other matches (evidence.fit_shape), used in every half; without it, per-half models are
     fitted inside each half only. See the module docstring for the columns.
     """
     ball, players = (_inf_as_missing(np.asarray(a, dtype=float)) for a in (ball, players))
@@ -57,7 +59,7 @@ def fusion_features(ball: np.ndarray, players: np.ndarray, team: np.ndarray, pit
     scan = ev.scan_teams(filled, tracking.players, tracking.team)
     nearest = ev.nearest_evidence(tracking.ball, lost, tracking.players, tracking.team)
     lead = ev.time_lead(scan.t_best[:, HOME], scan.t_best[:, AWAY], lost)
-    shape, _ = ev.shape_logits(scan, lost, inclusive, everywhere=True, length=length)
+    shape, _ = ev.shape_logits(scan, lost, inclusive, everywhere=True, length=length, fitted=shape_fit)
     shape = np.clip(shape, -SHAPE_LOGIT_CAP, SHAPE_LOGIT_CAP)
     shape_lost = np.where(lost, shape, 0.0)
     return np.column_stack([nearest, lead, shape, shape_lost]), list(FEATURE_NAMES)

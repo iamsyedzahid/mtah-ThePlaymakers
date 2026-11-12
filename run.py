@@ -39,7 +39,7 @@ from mtah.touches import touches
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_OUT = ROOT / "outputs" / "synthetic.csv"
-DEFAULT_REAL_OUT = ROOT / "outputs" / "real.csv"
+DEFAULT_REAL_OUT = ROOT / "outputs" / "The Playmakers.csv"
 
 
 def predict(tracking: Tracking, set_pieces: Sequence[SetPiece], extra_dead: Sequence[Interval] = ()) -> LabelArray:
@@ -74,10 +74,12 @@ def predict_real(open_games: str | None = None, dfl_games: str | None = None) ->
         games = opengames.training_games(open_games)
         step("checking and loading the DFL open matches (about a minute)")
         games += dfl.training_games(dfl_games)
+        step("fitting the team-shape model and the player-speed groups on the open matches")
+        context = fusion.fit_context(games)
         rows = []
         for gm in games:
             step(f"features for {gm['name']}")
-            rows += fusion.training_rows(gm)
+            rows += fusion.training_rows(gm, context)
         step(f"training the learned layer on {sum(len(y) for _, y in rows):,} frames (several minutes, one thread)")
         model = fusion.fit(rows)
         step("labelling our match")
@@ -86,7 +88,7 @@ def predict_real(open_games: str | None = None, dfl_games: str | None = None) ->
         known_dead[SECOND_HALF_D_BLOCK[0] : SECOND_HALF_D_BLOCK[1] + 1] = True
         halves = [(a, b + 1) for a, b in GRADED_HALVES]
         codes = fusion.label(tracking.ball, tracking.players, tracking.team, PITCH_M, halves,
-                             model=model, known_dead=known_dead)
+                             model=model, known_dead=known_dead, context=context)
     return np.array([H, A, D, X])[codes].astype(LABEL_DTYPE)
 
 
